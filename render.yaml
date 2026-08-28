@@ -1,0 +1,27 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Dental CRM AI Server (FastAPI + LangGraph) on Render with Astral uv
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: dental-crm-ai-server
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: "curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv pip install --system -r requirements.txt"
+    startCommand: "$HOME/.local/bin/uv run uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: ENVIRONMENT
+        value: production
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: '["*"]'
