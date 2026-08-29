@@ -14,11 +14,11 @@ This guide explains how to deploy the **Dental CRM AI Server (FastAPI + LangGrap
    - **Environment / Runtime**: `Python`
    - **Build Command**:
      ```bash
-     curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv pip install --system -r requirements.txt
+     pip install uv && python -m uv pip install --system -r requirements.txt
      ```
    - **Start Command**:
      ```bash
-     $HOME/.local/bin/uv run uvicorn main:app --host 0.0.0.0 --port $PORT
+     python -m uvicorn main:app --host 0.0.0.0 --port $PORT
      ```
 
 4. **Environment Variables**:

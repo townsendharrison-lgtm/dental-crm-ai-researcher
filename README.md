@@ -74,11 +74,11 @@ git push -u origin main
    - **Runtime**: `Python`
    - **Build Command**:
      ```bash
-     curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv pip install --system -r requirements.txt
+     pip install uv && python -m uv pip install -r requirements.txt
      ```
    - **Start Command**:
      ```bash
-     $HOME/.local/bin/uv run uvicorn main:app --host 0.0.0.0 --port $PORT
+     python -m uvicorn main:app --host 0.0.0.0 --port $PORT
      ```
 4. Add your Environment Variables:
    - `OPENAI_API_KEY`
