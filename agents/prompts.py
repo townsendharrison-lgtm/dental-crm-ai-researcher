@@ -42,30 +42,37 @@ Student Profile:
 - Shadowing: {shadowing_hours} hrs (General Dentist: {general_shadowing_hours} hrs)
 - Volunteering: {volunteering_hours} hrs | Dental Experience: {dental_exp_hours} hrs | Research: {research_hours} hrs
 - State of Residence: {student_state}
+- Applicant Type: {applicant_type}
 - Completed Courses: {completed_courses_summary}
 - LORs: {lor_summary}
 
 Target Dental School: {school_name} ({school_location})
-- Class Averages: Avg cGPA: {school_avg_cgpa}, Avg DAT AA: {school_avg_dat_aa}, Avg DAT TS: {school_avg_dat_ts}
+- Class Averages: Avg cGPA: {school_avg_cgpa}, Avg sGPA: {school_avg_sgpa}, Avg DAT AA: {school_avg_dat_aa}, Avg DAT TS: {school_avg_dat_ts}
 - Cutoffs: Min cGPA: {school_min_cgpa}, Min DAT AA: {school_min_dat}
 - In-State Acceptance Rate: {school_is_rate}% vs Out-of-State: {school_oos_rate}%
 - Prerequisite Requirements: {school_prereq_summary}
+- Extracurricular Standards: Min Shadowing: {school_min_shadowing}h, Recommended: {school_rec_shadowing}h | Min Volunteering: {school_min_volunteering}h | Research: {school_research_pref}
+- LOR Requirements: {school_lor_summary}
+
+Evaluation Context (Pre-computed):
+- Match Score: {match_score}% | Fit Category: {fit_category}
+- Interview Probability: {interview_prob}% | Accepted Probability: {accepted_prob}%
+- Prerequisite Audit: {prereq_met_count}/{prereq_total_count} MET, {prereq_unknown_count} UNKNOWN, {prereq_unmet_count} UNMET
+- Extracurricular Audit: {extracurricular_summary}
 
 YOUR TASK:
-Provide a rigorous, data-driven evaluation:
-1. Determine Admissions Standing:
-   - Match Score (0 to 100%)
-   - Fit Category ("Strong Fit", "Target", "Reach", "Safety", or "High Risk / Unqualified")
-   - Estimated Outcome Probabilities:
-     * Interview Probability (%)
-     * Accepted Probability (%)
-     * Waitlist Probability (%)
-     * Rejection Probability (%)
-2. Provide Explainability:
-   - Most Likely Reason for this standing
-   - Most Limiting Factor (the primary bottleneck preventing immediate acceptance)
-   - Top 3 Highest ROI Improvements (each with current metric, target metric, impact level, and estimated interview/acceptance probability lift)
-3. Provide a clear, prioritized Strategic Roadmap with step-by-step guidance.
+Provide a rigorous, data-driven evaluation. Be HONEST and REALISTIC — do not inflate or sugarcoat results.
+
+Respond ONLY in valid JSON matching this exact structure:
+{{
+  "mostLikelyReason": "A specific, data-backed explanation of why this student has this standing at THIS school. Reference actual numbers (e.g. 'Student cGPA of 3.45 is 0.20 below the class average of 3.65'). Do NOT use generic statements.",
+  "mostLimitingFactor": "The single biggest bottleneck preventing higher standing. Be specific (e.g. 'DAT AA of 18 falls below the school minimum cutoff of 19, making the application likely to be screened out automatically').",
+  "actionSteps": [
+    "Step 1: Specific, actionable guidance tied to the student's actual gaps",
+    "Step 2: ...",
+    "Step 3: ..."
+  ]
+}}
 """
 
 HISTORICAL_TREND_CALIBRATION_PROMPT = """You are the DSG Calibration & Trend Discovery Agent.

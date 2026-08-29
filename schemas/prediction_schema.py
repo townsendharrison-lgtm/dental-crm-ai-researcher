@@ -5,7 +5,7 @@ class RequirementCheckItem(BaseModel):
     id: str
     name: str
     category: str = "Prerequisites"  # BCP, Biological, Nonscience, Other Science, DAT, GPA, Shadowing, LOR
-    status: str = "MET"              # MET, WARNING, UNMET, RECOMMENDED_MISSING
+    status: str = "MET"              # MET, WARNING, UNMET, RECOMMENDED_MISSING, UNKNOWN
     studentValue: Any
     schoolRequirement: Any
     details: str

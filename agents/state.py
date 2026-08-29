@@ -34,6 +34,7 @@ class ComparisonGraphState(TypedDict, total=False):
     
     # Analysis steps
     prerequisite_checks: List[RequirementCheckItem]
+    extracurricular_checks: List[RequirementCheckItem]
     gpa_analysis: Dict[str, Any]
     dat_analysis: Dict[str, Any]
     extracurricular_analysis: Dict[str, Any]

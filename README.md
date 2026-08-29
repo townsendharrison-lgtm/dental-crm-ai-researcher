@@ -74,7 +74,7 @@ git push -u origin main
    - **Runtime**: `Python`
    - **Build Command**:
      ```bash
-     pip install uv && python -m uv pip install -r requirements.txt
+     pip install uv && python -m uv pip install --system -r requirements.txt
      ```
    - **Start Command**:
      ```bash
