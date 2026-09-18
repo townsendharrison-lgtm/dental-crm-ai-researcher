@@ -1,5 +1,6 @@
 import ssl
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -8,11 +9,40 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.clients.operations import external_call
-from app.config import Settings
+from app.config import ROOT, Settings
 
 
 class ConfigurationMissing(RuntimeError):
     pass
+
+
+def resolve_database_ca_file(settings: Settings) -> str | None:
+    """Pick a CA bundle that works on Render and local hosts.
+
+    Order: explicit DATABASE_CA_FILE (if the path exists) → bundled Supabase CA →
+    certifi system bundle. Empty DATABASE_CA_FILE is treated as unset.
+    """
+    configured = (settings.database_ca_file or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        path = Path(configured)
+        candidates.append(path if path.is_absolute() else ROOT / path)
+    candidates.append(ROOT / "certs" / "prod-ca-2021.crt")
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    try:
+        import certifi
+        return certifi.where()
+    except Exception:
+        return None
+
+
+def make_ssl_context(settings: Settings):
+    if not settings.database_ssl:
+        return False
+    cafile = resolve_database_ca_file(settings)
+    return ssl.create_default_context(cafile=cafile)
 
 
 def make_engine(settings: Settings):
@@ -21,10 +51,9 @@ def make_engine(settings: Settings):
     url = make_url(settings.database_url.get_secret_value()).set(drivername="postgresql+asyncpg")
     # asyncpg uses an SSL context rather than libpq's sslmode query option.
     url = url.difference_update_query(["sslmode"])
-    ssl_context = ssl.create_default_context(cafile=settings.database_ca_file or None) if settings.database_ssl else False
     return create_async_engine(
         url, pool_pre_ping=True, pool_size=3, max_overflow=2, hide_parameters=True,
-        connect_args={"ssl": ssl_context, "timeout": settings.external_timeout_seconds,
+        connect_args={"ssl": make_ssl_context(settings), "timeout": settings.external_timeout_seconds,
                       "command_timeout": settings.external_timeout_seconds},
     )
 

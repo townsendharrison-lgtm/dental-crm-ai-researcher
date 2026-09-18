@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -41,6 +42,20 @@ async def test_database_engine_uses_asyncpg_and_hides_parameters(settings):
     assert engine.url.drivername == "postgresql+asyncpg"
     assert engine.sync_engine.hide_parameters is True
     await engine.dispose()
+
+
+def test_resolve_database_ca_falls_back_to_bundled_cert(settings):
+    from app.db.session import resolve_database_ca_file
+    from app.config import ROOT
+
+    settings = settings.model_copy(update={"database_ca_file": ""})
+    resolved = resolve_database_ca_file(settings)
+    assert resolved is not None
+    assert Path(resolved).is_file()
+    # Prefer the bundled Supabase CA when present.
+    bundled = ROOT / "certs" / "prod-ca-2021.crt"
+    if bundled.is_file():
+        assert Path(resolved) == bundled
 
 
 def test_gpt4o_is_the_configured_model(settings):

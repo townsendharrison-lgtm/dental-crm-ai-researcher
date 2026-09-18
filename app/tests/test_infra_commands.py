@@ -22,16 +22,19 @@ async def test_storage_only_bootstrap_does_not_need_database(settings, monkeypat
 
 
 async def test_queue_only_bootstrap_does_not_provision_storage(settings, monkeypatch):
-    database = SimpleNamespace(execute=AsyncMock(), close=AsyncMock())
+    database = SimpleNamespace(execute=AsyncMock(return_value=[]), close=AsyncMock())
     storage = SimpleNamespace(ensure_bucket=AsyncMock(), close=AsyncMock())
     monkeypatch.setattr("app.bootstrap.get_settings", lambda: settings)
     monkeypatch.setattr("app.bootstrap.Database", lambda _: database)
     monkeypatch.setattr("app.bootstrap.StorageClient", lambda _: storage)
     await bootstrap(queue_only=True)
     storage.ensure_bucket.assert_not_awaited()
-    assert database.execute.await_count == 4
     operations = [call.args[0] for call in database.execute.await_args_list]
-    assert operations == ["enable_pgmq", "create_queue", "create_document_queue", "create_research_queue"]
+    assert operations[0] == "enable_pgmq"
+    assert "create_queue" in operations
+    assert "create_document_queue" in operations
+    assert "create_research_queue" in operations
+    assert "check_create_queue" in operations
 
 
 def fake_storage():
