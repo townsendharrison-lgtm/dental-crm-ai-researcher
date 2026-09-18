@@ -66,7 +66,16 @@ def make_ssl_context(settings: Settings):
     except Exception:
         context = ssl.create_default_context()
     for path in ca_file_candidates(settings):
-        context.load_verify_locations(cafile=str(path))
+        try:
+            context.load_verify_locations(cafile=str(path))
+        except Exception:
+            # A malformed/incompatible CA file must not disable TLS entirely.
+            continue
+    if not settings.database_ssl_verify:
+        # Encrypted transport without certificate/hostname verification. Use only
+        # when the platform CA store cannot validate Supabase's pooler certificate.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     return context
 
 

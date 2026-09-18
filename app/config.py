@@ -19,6 +19,10 @@ class Settings(BaseSettings):
 
     database_url: SecretStr = SecretStr("")
     database_ssl: bool = True
+    # Verify the DB server certificate. Keep true. Set false ONLY as a last resort
+    # (still encrypted) when a platform's CA store cannot validate Supabase's pooler
+    # cert and you accept the reduced trust for that internal connection.
+    database_ssl_verify: bool = True
     database_ca_file: str | None = None
     db_schema: str = Field(default="school_ai", pattern=r"^[a-z][a-z0-9_]{0,62}$")
     supabase_url: str = ""

@@ -71,6 +71,16 @@ def test_ssl_context_trusts_certifi_and_supabase_ca(settings):
     assert (ROOT / "certs" / "prod-ca-2021.crt").is_file()
 
 
+def test_ssl_verify_false_stays_encrypted_without_verification(settings):
+    from app.db.session import make_ssl_context
+
+    settings = settings.model_copy(update={"database_ssl": True, "database_ssl_verify": False})
+    ctx = make_ssl_context(settings)
+    assert ctx is not False
+    assert ctx.check_hostname is False
+    assert ctx.verify_mode == ssl.CERT_NONE
+
+
 def test_gpt4o_is_the_configured_model(settings):
     assert settings.openai_model == "gpt-4o"
     assert settings.storage_configured is True
