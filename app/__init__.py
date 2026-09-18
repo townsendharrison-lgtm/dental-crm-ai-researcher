@@ -1,0 +1,1 @@
+"""Independent school AI service."""
