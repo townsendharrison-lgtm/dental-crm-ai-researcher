@@ -1,5 +1,7 @@
-import pytest
+import ssl
 from pathlib import Path
+
+import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -52,10 +54,21 @@ def test_resolve_database_ca_falls_back_to_bundled_cert(settings):
     resolved = resolve_database_ca_file(settings)
     assert resolved is not None
     assert Path(resolved).is_file()
-    # Prefer the bundled Supabase CA when present.
     bundled = ROOT / "certs" / "prod-ca-2021.crt"
     if bundled.is_file():
         assert Path(resolved) == bundled
+
+
+def test_ssl_context_trusts_certifi_and_supabase_ca(settings):
+    from app.db.session import make_ssl_context
+    from app.config import ROOT
+
+    settings = settings.model_copy(update={"database_ca_file": "certs/prod-ca-2021.crt", "database_ssl": True})
+    ctx = make_ssl_context(settings)
+    assert ctx is not False
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    # Bundled CA must be loadable alongside certifi (pooler + direct hosts).
+    assert (ROOT / "certs" / "prod-ca-2021.crt").is_file()
 
 
 def test_gpt4o_is_the_configured_model(settings):

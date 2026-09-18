@@ -16,21 +16,32 @@ class ConfigurationMissing(RuntimeError):
     pass
 
 
-def resolve_database_ca_file(settings: Settings) -> str | None:
-    """Pick a CA bundle that works on Render and local hosts.
-
-    Order: explicit DATABASE_CA_FILE (if the path exists) → bundled Supabase CA →
-    certifi system bundle. Empty DATABASE_CA_FILE is treated as unset.
-    """
+def ca_file_candidates(settings: Settings) -> list[Path]:
+    """Extra CA files to trust in addition to certifi (Supabase direct + custom)."""
+    paths: list[Path] = []
     configured = (settings.database_ca_file or "").strip()
-    candidates: list[Path] = []
     if configured:
         path = Path(configured)
-        candidates.append(path if path.is_absolute() else ROOT / path)
-    candidates.append(ROOT / "certs" / "prod-ca-2021.crt")
-    for path in candidates:
-        if path.is_file():
-            return str(path)
+        paths.append(path if path.is_absolute() else ROOT / path)
+    paths.append(ROOT / "certs" / "prod-ca-2021.crt")
+    # De-dupe while preserving order; skip missing files.
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def resolve_database_ca_file(settings: Settings) -> str | None:
+    """Backward-compatible helper: first usable CA path (explicit, bundled, or certifi)."""
+    for path in ca_file_candidates(settings):
+        return str(path)
     try:
         import certifi
         return certifi.where()
@@ -39,10 +50,24 @@ def resolve_database_ca_file(settings: Settings) -> str | None:
 
 
 def make_ssl_context(settings: Settings):
+    """TLS for asyncpg.
+
+    Supabase *session pooler* hosts present a publicly trusted cert (needs certifi /
+    system CAs). Supabase *direct* DB hosts may need their published prod CA.
+    Loading only prod-ca-2021.crt breaks pooler verification on some platforms
+    (e.g. Render) with SSLCertVerificationError — so we always start from certifi
+    and then add the Supabase / configured CA files.
+    """
     if not settings.database_ssl:
         return False
-    cafile = resolve_database_ca_file(settings)
-    return ssl.create_default_context(cafile=cafile)
+    try:
+        import certifi
+        context = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        context = ssl.create_default_context()
+    for path in ca_file_candidates(settings):
+        context.load_verify_locations(cafile=str(path))
+    return context
 
 
 def make_engine(settings: Settings):
