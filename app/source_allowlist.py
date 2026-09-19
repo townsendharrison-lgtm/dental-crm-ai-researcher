@@ -43,6 +43,21 @@ def allowed_hosts_for_school(official_url: str, *, extra_domains: tuple[str, ...
     return frozenset(hosts)
 
 
+def official_hosts_for_school(official_url: str) -> frozenset[str]:
+    """School domain only (plus www) — used when discovering trusted pages via search."""
+    school_host = hostname_of(official_url)
+    suffix = registrable_suffix(school_host)
+    hosts = {school_host, suffix, f"www.{suffix}"}
+    return frozenset(hosts)
+
+
+def trusted_discovery_hosts(official_url: str) -> frozenset[str]:
+    """Official school hosts + ADEA (trusted admissions directory). No blogs/rankers."""
+    hosts = set(official_hosts_for_school(official_url))
+    hosts.update({"adea.org", "www.adea.org"})
+    return frozenset(hosts)
+
+
 def is_allowed_url(url: str, allowed_hosts: frozenset[str]) -> bool:
     try:
         host = hostname_of(url)

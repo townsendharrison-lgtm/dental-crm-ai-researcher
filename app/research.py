@@ -40,7 +40,10 @@ class ResearchService:
         self.fetch = fetch or WebFetchClient(settings, database)
         self.llm = llm or LLMClient(settings)
 
-    async def enqueue(self, school_id: UUID, *, force_refresh: bool = False, target_url: str | None = None):
+    async def enqueue(
+        self, school_id: UUID, *, force_refresh: bool = False,
+        target_url: str | None = None, mode: str | None = None,
+    ):
         async def find(connection):
             school = (await connection.execute(select(SCHOOLS).where(SCHOOLS.c.id == school_id))).mappings().first()
             if school is None:
@@ -51,16 +54,16 @@ class ResearchService:
             return dict(school), dict(job) if job else None
 
         school, job = await self.database.transaction("find_research_job", find)
-        # A targeted-URL crawl is always a fresh job (it fetches a specific page),
-        # so it does not dedupe against an in-flight gap-research job.
-        if job and job["status"] in {"pending", "running"} and not force_refresh and not target_url:
+        # Targeted crawl / discover always starts a fresh job (do not reuse in-flight).
+        fresh = bool(target_url) or mode == "discover_trusted"
+        if job and job["status"] in {"pending", "running"} and not force_refresh and not fresh:
             return {"job_id": job["id"], "status": job["status"], "cached": True}
 
         async def enqueue(connection):
             await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                                      {"key": f"research-enqueue:{school_id}"})
             _, current = await find(connection)
-            if current and current["status"] in {"pending", "running"} and not force_refresh and not target_url:
+            if current and current["status"] in {"pending", "running"} and not force_refresh and not fresh:
                 return {"job_id": current["id"], "status": current["status"], "cached": True}
             job_id = uuid4()
             payload = {
@@ -68,6 +71,7 @@ class ResearchService:
                 "school_name": school["name"], "force_refresh": force_refresh,
                 "taxonomy_hash": self.taxonomy.content_hash,
                 "confidence_floor": self.settings.research_confidence_floor,
+                "mode": mode or ("crawl_url" if target_url else "official_crawl"),
             }
             if target_url:
                 payload["target_url"] = target_url
@@ -292,11 +296,37 @@ class ResearchService:
             await self.queue.archive(connection, message_id)
         await self.database.transaction("archive_terminal_research", archive)
 
-    async def run_research(self, school: dict, *, force_refresh: bool = False, target_url: str | None = None) -> dict:
+    async def coverage(self, school_id: UUID) -> dict:
+        """How many of the 138 taxonomy slots have trusted evidence."""
+        facts = await self.load_facts_for_ui(school_id)
+        floor = self.settings.research_confidence_floor
+        filled = 0
+        by_category: dict[str, dict] = {}
+        for row in facts:
+            cat = row.get("category") or "Other"
+            slot = by_category.setdefault(cat, {"total": 0, "filled": 0})
+            slot["total"] += 1
+            conf = row.get("confidence")
+            has = row.get("value") is not None and conf is not None and float(conf) >= floor
+            if has or row.get("source_type") == "manual":
+                filled += 1
+                slot["filled"] += 1
+        total = len(facts)
+        return {
+            "school_id": str(school_id),
+            "filled": filled,
+            "total": total,
+            "coverage_pct": round(100 * filled / total, 1) if total else 0,
+            "by_category": by_category,
+            "taxonomy_version": self.taxonomy.version,
+        }
+
+    async def run_research(
+        self, school: dict, *, force_refresh: bool = False,
+        target_url: str | None = None, mode: str | None = None,
+    ) -> dict:
         facts = await self.load_facts(school["id"])
         gaps = compute_gaps(self.taxonomy, facts, confidence_floor=self.settings.research_confidence_floor)
-        # Keys already covered at/above the confidence floor must not be re-written.
-        # Manual admin values are always treated as covered.
         best: dict[str, float] = {}
         covered: set[str] = set()
         for row in facts:
@@ -310,20 +340,24 @@ class ResearchService:
         covered |= {key for key, conf in best.items() if conf >= floor}
 
         agent = WebResearchAgent(self.settings, self.search, self.fetch, self.llm, self.taxonomy)
-        if target_url:
+        if mode == "discover_trusted":
+            outcome = await agent.research_discover(
+                school_name=school["name"], official_url=school["official_url"],
+                gaps=gaps, force_refresh=force_refresh,
+            )
+        elif target_url:
             outcome = await agent.research_url(
                 school_name=school["name"], official_url=school["official_url"],
                 url=target_url, gaps=gaps, force_refresh=force_refresh,
             )
         else:
-            # Crawl the school's official URL deeply (no multi-site search).
             outcome = await agent.research_gaps(
                 school_name=school["name"], official_url=school["official_url"],
                 gaps=gaps, force_refresh=force_refresh,
             )
         writes = [w for w in outcome["writes"] if w.factor_key not in covered]
-        # Strip write objects for JSON job result; persistence uses the dataclass list.
         serializable = {
+            "mode": mode or ("crawl_url" if target_url else "official_crawl"),
             "gaps": outcome["gaps"],
             "remaining_gaps": outcome["remaining_gaps"],
             "rejected_urls": outcome["rejected_urls"],
@@ -331,6 +365,8 @@ class ResearchService:
             "write_count": len(writes),
             "skipped_covered_keys": sorted({w.factor_key for w in outcome["writes"] if w.factor_key in covered}),
             "budget": outcome.get("budget"),
+            "discovered_seeds": outcome.get("discovered_seeds"),
+            "discovery": outcome.get("discovery"),
         }
         return serializable, writes
 

@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     page_cache_ttl_days: int = Field(default=30, ge=1, le=365)
     research_confidence_floor: float = Field(default=0.5, ge=0, le=1)
     # Admin crawl (docs + explicit URL only — no multi-site search).
-    research_max_gaps: int = Field(default=80, ge=1, le=200)
+    research_max_gaps: int = Field(default=130, ge=1, le=200)
     research_max_urls_per_gap: int = Field(default=1, ge=1, le=10)
     # Deprecated: Tavily multi-site search removed; kept for env compat (unused).
     research_max_searches: int = Field(default=0, ge=0, le=30)
@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     research_job_timeout_seconds: float = Field(default=600, gt=30, le=1800)
     research_min_page_chars: int = Field(default=400, ge=50, le=5000)
     research_chunk_chars: int = Field(default=16000, ge=500, le=20000)
+    # Discover trusted sources: search only official domain (+ ADEA), then deep-crawl seeds.
+    research_discover_max_queries: int = Field(default=8, ge=1, le=20)
+    research_discover_max_results_per_query: int = Field(default=5, ge=1, le=10)
+    research_discover_max_seeds: int = Field(default=15, ge=1, le=40)
+    research_discover_max_pages: int = Field(default=50, ge=1, le=120)
+    research_discover_max_extract_calls: int = Field(default=100, ge=1, le=300)
+    research_discover_timeout_seconds: float = Field(default=900, gt=60, le=1800)
+    research_discover_categories_per_page: int = Field(default=4, ge=1, le=14)
     openai_api_key: SecretStr = SecretStr("")
     openai_model: Literal["gpt-4o"] = "gpt-4o"
     openai_timeout_seconds: float = Field(default=60, gt=0, le=180)

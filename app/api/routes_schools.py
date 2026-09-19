@@ -178,7 +178,7 @@ def build_school_router() -> APIRouter:
         description=(
             "Enqueues a research_school job that BFS-crawls the school's official_url "
             "(same-host subpages) and extracts missing taxonomy facts. Does not search "
-            "third-party sites. Prefer POST /crawl-url for an explicit admin-chosen URL."
+            "third-party sites. Prefer POST /discover-trusted for official-domain discovery."
         ),
     )
     async def enqueue_research(
@@ -191,6 +191,40 @@ def build_school_router() -> APIRouter:
         except ResearchNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
         return ResearchEnqueueResponse(**result)
+
+    @router.post(
+        "/schools/{school_id}/discover-trusted",
+        response_model=ResearchEnqueueResponse,
+        summary="Discover trusted official pages and extract taxonomy factors",
+        description=(
+            "Searches only the school's official domain (and ADEA) to find admissions/"
+            "requirements/class-profile pages, then deep-crawls those seeds with "
+            "category-batched extraction toward the full taxonomy. Does not extract "
+            "from blogs or ranking sites."
+        ),
+    )
+    async def discover_trusted(
+        school_id: UUID,
+        request: Request,
+        force_refresh: Annotated[bool, Query()] = False,
+    ):
+        try:
+            result = await _research(request).enqueue(
+                school_id, force_refresh=force_refresh, mode="discover_trusted",
+            )
+        except ResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return ResearchEnqueueResponse(**result)
+
+    @router.get(
+        "/schools/{school_id}/coverage",
+        summary="Taxonomy coverage for a school (filled vs hoped-to-extract slots)",
+    )
+    async def get_coverage(school_id: UUID, request: Request):
+        try:
+            return await _research(request).coverage(school_id)
+        except ResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
 
     @router.get(
         "/jobs/{job_id}",
