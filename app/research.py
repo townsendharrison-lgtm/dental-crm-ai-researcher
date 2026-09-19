@@ -177,6 +177,17 @@ class ResearchService:
     async def run_research(self, school: dict, *, force_refresh: bool = False, target_url: str | None = None) -> dict:
         facts = await self.load_facts(school["id"])
         gaps = compute_gaps(self.taxonomy, facts, confidence_floor=self.settings.research_confidence_floor)
+        # Keys already covered at/above the confidence floor must not be re-written.
+        covered = set()
+        best: dict[str, float] = {}
+        for row in facts:
+            key = row["factor_key"]
+            conf = float(row["confidence"])
+            if key not in best or conf > best[key]:
+                best[key] = conf
+        floor = self.settings.research_confidence_floor
+        covered = {key for key, conf in best.items() if conf >= floor}
+
         agent = WebResearchAgent(self.settings, self.search, self.fetch, self.llm, self.taxonomy)
         if target_url:
             outcome = await agent.research_url(
@@ -188,15 +199,17 @@ class ResearchService:
                 school_name=school["name"], official_url=school["official_url"],
                 gaps=gaps, force_refresh=force_refresh,
             )
+        writes = [w for w in outcome["writes"] if w.factor_key not in covered]
         # Strip write objects for JSON job result; persistence uses the dataclass list.
         serializable = {
             "gaps": outcome["gaps"],
             "remaining_gaps": outcome["remaining_gaps"],
             "rejected_urls": outcome["rejected_urls"],
             "outcomes": outcome["outcomes"],
-            "write_count": len(outcome["writes"]),
+            "write_count": len(writes),
+            "skipped_covered_keys": sorted({w.factor_key for w in outcome["writes"] if w.factor_key in covered}),
         }
-        return serializable, outcome["writes"]
+        return serializable, writes
 
     async def close(self):
         await self.search.close()

@@ -96,11 +96,44 @@ async def test_cross_school_tier_uses_phase4_family_weight(taxonomy):
     )
     row = next(d for d in drafts if d.factor_key == "avg_gpa")
     assert row.weight_source == "cross_school_inferred"
-    # Only one weighted Academics factor → category norm scales provisional 0.90 to 1.0
-    assert default_family_weight("avg_gpa") == Decimal("0.90")
+    # Only one weighted Academics factor → category norm scales provisional to 1.0
     assert row.weight == Decimal("1.00000000")
-    assert "Phase 4 default curve weight 0.90" in row.reasoning
+    assert "scaled by cross-school distinctiveness" in row.reasoning
+    assert "90.0" in row.reasoning
     assert row.source_urls
+
+
+async def test_cross_school_weights_differ_by_percentile(taxonomy):
+    """Two schools with different GPA percentiles must get different provisional weights."""
+    from app.agents.normalization_service import school_specific_provisional_weight
+
+    high_id, low_id = uuid4(), uuid4()
+    gpa = fact(value=3.7)
+    agent = RubricInferenceAgent(taxonomy, llm=None)
+
+    high_stats = {
+        "avg_gpa": {
+            "sample_size": 10,
+            "percentiles": {"by_school": {str(high_id): {"percentile_rank": 95.0}}},
+        }
+    }
+    low_stats = {
+        "avg_gpa": {
+            "sample_size": 10,
+            "percentiles": {"by_school": {str(low_id): {"percentile_rank": 10.0}}},
+        }
+    }
+    high = agent.draft_cross_school(
+        best={"avg_gpa": gpa}, stated_keys=set(), stats_by_key=high_stats,
+        school_id=high_id, official_url="https://high.edu",
+    )[0]
+    low = agent.draft_cross_school(
+        best={"avg_gpa": gpa}, stated_keys=set(), stats_by_key=low_stats,
+        school_id=low_id, official_url="https://low.edu",
+    )[0]
+    assert high.weight > low.weight
+    assert high.weight == school_specific_provisional_weight("avg_gpa", percentile_rank=95.0)
+    assert low.weight == school_specific_provisional_weight("avg_gpa", percentile_rank=10.0)
 
 
 async def test_cross_school_provisional_matches_phase4_before_norm(taxonomy):

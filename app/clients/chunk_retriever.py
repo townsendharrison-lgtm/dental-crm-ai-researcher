@@ -1,6 +1,6 @@
 """LlamaIndex retrieval: pick only taxonomy-relevant chunks before LLM extraction.
 
-Instead of calling GPT-4o on every chunk with the full 131-factor taxonomy, we:
+Instead of calling GPT-4o on every chunk with the full taxonomy, we:
 1. Embed parsed chunks once (cheap embedding model).
 2. For each taxonomy category, retrieve the top-k similar chunks.
 3. Extract each selected chunk once against only the categories that matched it.

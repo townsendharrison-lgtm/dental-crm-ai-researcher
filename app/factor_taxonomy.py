@@ -107,15 +107,22 @@ def _definitions():
     ):
         number("Shadowing", key, description, unit)
     words("Shadowing", "shadowing_consistency", "Consistency, length and continuity of shadowing involvement")
+    words("Shadowing", "shadowing_specialty_types",
+          "Which dental specialties were shadowed (names/types), when explicitly stated")
 
     for category, items in {
         "Dental Experience": [
             ("dental_employment", "Dental employment: hygienist, dental assistant, lab technician, receptionist or other stated role"),
+            ("dental_hygienist_experience", "Experience as a dental hygienist"),
+            ("dental_assistant_experience", "Experience as a dental assistant"),
+            ("dental_lab_tech_experience", "Experience as a dental lab technician"),
+            ("dental_receptionist_experience", "Experience as a dental receptionist or front-office staff"),
             ("clinical_employment", "Clinical employment experience"),
             ("hands_on_dental_experience", "Hands-on dental experience"),
             ("dental_experience_depth", "Length, depth and responsibilities of dental experience"),
         ],
         "Service": [
+            ("dental_service", "Dental-related volunteering or service"),
             ("non_dental_service", "Non-dental volunteering or service"),
             ("underserved_community_service", "Service to underserved populations and communities"),
             ("service_consistency", "Consistency and longitudinal commitment to service"),
@@ -129,6 +136,7 @@ def _definitions():
         ],
         "Research": [
             ("research_duration", "Duration of research involvement"),
+            ("research_field", "Research field, topic or area when explicitly stated"),
             ("research_outputs", "Publications, posters and presentations"),
             ("research_relevance_depth", "Relevance and depth of research"),
         ],
@@ -204,7 +212,7 @@ def _definitions():
     return tuple(factors)
 
 
-APPROVED_TAXONOMY = FactorTaxonomy(version="client-criteria-v1", categories=CATEGORIES, factors=_definitions())
+APPROVED_TAXONOMY = FactorTaxonomy(version="client-criteria-v2", categories=CATEGORIES, factors=_definitions())
 
 
 def get_taxonomy() -> FactorTaxonomy:

@@ -83,6 +83,35 @@ def default_family_weight(factor_key: str, *, overrides: Mapping[str, Decimal] |
     return Decimal(weights[role])
 
 
+def cross_school_weight_multiplier(percentile_rank: float | int | Decimal | None) -> Decimal:
+    """Scale a provisional weight by how distinctive this school's value is among peers.
+
+    Percentile 0 → 0.40× (lenient / common), 50 → 1.00×, 100 → 1.60× (strict / rare).
+    Missing percentile → 1.00× (no cross-school signal).
+    """
+    if percentile_rank is None:
+        return Decimal("1")
+    try:
+        p = float(percentile_rank)
+    except (TypeError, ValueError):
+        return Decimal("1")
+    p = max(0.0, min(100.0, p))
+    return Decimal(str(round(0.4 + (p / 100.0) * 1.2, 8)))
+
+
+def school_specific_provisional_weight(
+    factor_key: str,
+    *,
+    percentile_rank: float | int | Decimal | None = None,
+    base: Decimal | None = None,
+) -> Decimal:
+    """Family default (or 0.10) × cross-school distinctiveness multiplier."""
+    provisional = base if base is not None else default_family_weight(factor_key)
+    if provisional is None:
+        provisional = Decimal("0.10")
+    return (provisional * cross_school_weight_multiplier(percentile_rank)).quantize(Decimal("0.00000001"))
+
+
 def score_along_min_avg_max(
     value: Decimal | float | int,
     minimum: Decimal | float | int,

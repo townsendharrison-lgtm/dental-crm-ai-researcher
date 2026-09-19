@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=5, ge=0, le=20)
     page_cache_ttl_days: int = Field(default=30, ge=1, le=365)
     research_confidence_floor: float = Field(default=0.5, ge=0, le=1)
-    research_max_gaps: int = Field(default=20, ge=1, le=131)
+    research_max_gaps: int = Field(default=20, ge=1, le=200)
     research_max_urls_per_gap: int = Field(default=3, ge=1, le=10)
     research_min_page_chars: int = Field(default=400, ge=50, le=5000)
     research_chunk_chars: int = Field(default=16000, ge=500, le=20000)

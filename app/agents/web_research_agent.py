@@ -153,8 +153,8 @@ class WebResearchAgent:
 
         Unlike research_gaps (which searches allow-listed sources for gaps), this
         trusts an explicit URL. The URL's own host is added to the allow-list so a
-        school's official page (or another admin-chosen page) can be fetched. All
-        taxonomy factors are extracted so the page enriches whatever it contains.
+        school's official page (or another admin-chosen page) can be fetched.
+        Only gap factors are extracted — never re-writes keys already covered.
         """
         try:
             target_host = hostname_of(url)
@@ -163,8 +163,17 @@ class WebResearchAgent:
                     "outcomes": [], "writes": []}
         allowed = allowed_hosts_for_school(official_url, extra_domains=(target_host,))
         gap_keys = {gap.key for gap in gaps}
-        # Prefer filling known gaps; if none, extract the full taxonomy from the page.
-        target_keys = gap_keys or {factor.key for factor in self.taxonomy.factors}
+        # Gap-fill only: never re-extract factors the school already has at floor confidence.
+        # If there are no gaps, do not pull the full taxonomy (that would append duplicate keys).
+        if not gap_keys:
+            return {
+                "gaps": [],
+                "remaining_gaps": [],
+                "rejected_urls": [],
+                "outcomes": [{"url": url, "status": "skipped", "reason": "no_gaps"}],
+                "writes": [],
+            }
+        target_keys = gap_keys
         extract_taxonomy = subset_taxonomy(self.taxonomy, target_keys)
 
         outcomes: list[dict] = []

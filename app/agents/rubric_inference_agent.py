@@ -8,7 +8,7 @@ import re
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
-from app.agents.normalization_service import default_family_weight
+from app.agents.normalization_service import default_family_weight, school_specific_provisional_weight
 from app.clients.llm_client import LLMClient, ExtractionFailed
 from app.factor_taxonomy import FactorTaxonomy
 from app.schemas.rubric import (
@@ -168,19 +168,28 @@ class RubricInferenceAgent:
             if not urls:
                 continue
             family = default_family_weight(key)
-            provisional = family if family is not None else Decimal("0.10")
             stats = stats_by_key.get(key) or {}
             by_school = (stats.get("percentiles") or {}).get("by_school") or {}
             school_stats = by_school.get(str(school_id)) or {}
             percentile = school_stats.get("percentile_rank")
+            provisional = school_specific_provisional_weight(
+                key, percentile_rank=percentile, base=family,
+            )
             sample = stats.get("sample_size")
             reasoning_parts = [
-                f"Numeric factor with no stated weight; using Phase 4 default curve weight {provisional}.",
+                f"Numeric factor with no stated weight; base curve weight "
+                f"{family if family is not None else Decimal('0.10')} "
+                f"scaled by cross-school distinctiveness → {provisional}.",
             ]
             if percentile is not None:
-                reasoning_parts.append(f"School percentile rank among {sample} schools: {percentile}.")
+                reasoning_parts.append(
+                    f"School percentile rank among {sample} schools: {percentile} "
+                    f"(higher = stricter/rarer → more weight for this school)."
+                )
             else:
-                reasoning_parts.append("Cross-school percentile unavailable for this school; value still grounded in raw facts.")
+                reasoning_parts.append(
+                    "Cross-school percentile unavailable; using unscaled provisional weight."
+                )
             drafts.append(RubricFactorDraft(
                 factor_key=key,
                 value=fact.value,

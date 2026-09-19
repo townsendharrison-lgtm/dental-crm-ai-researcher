@@ -10,13 +10,26 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.clients.document_queue import DocumentQueue, DocumentTask
 from app.clients.fetch_client import DocumentParser
-from app.db.models import School, SchoolDocument, SchoolRawFact, Job
+from app.db.models import (
+    Job,
+    ProviderUsageEvent,
+    RubricFactor,
+    RubricOverride,
+    School,
+    SchoolDocument,
+    SchoolRawFact,
+    ScoringRun,
+)
 from app.factor_taxonomy import FactorTaxonomy, get_taxonomy
 
 SCHOOLS = School.__table__
 DOCUMENTS = SchoolDocument.__table__
 FACTS = SchoolRawFact.__table__
 JOBS = Job.__table__
+RUBRIC = RubricFactor.__table__
+OVERRIDES = RubricOverride.__table__
+RUNS = ScoringRun.__table__
+USAGE = ProviderUsageEvent.__table__
 
 
 class DocumentNotFound(ValueError):
@@ -40,6 +53,54 @@ class DocumentService:
             await connection.execute(insert(SCHOOLS).values(id=school_id, name=name, official_url=official_url))
             return school_id
         return await self.database.transaction("create_school", create)
+
+    async def delete_school(self, school_id: UUID) -> dict:
+        """Hard-delete a school and all school-scoped research/rubric/score data.
+
+        Order respects RESTRICT FKs. Storage objects are best-effort removed after DB commit.
+        """
+        async def wipe(connection):
+            school = (await connection.execute(
+                select(SCHOOLS).where(SCHOOLS.c.id == school_id)
+            )).mappings().first()
+            if school is None:
+                raise DocumentNotFound("School does not exist")
+            docs = (await connection.execute(
+                select(DOCUMENTS.c.id, DOCUMENTS.c.storage_bucket, DOCUMENTS.c.storage_key)
+                .where(DOCUMENTS.c.school_id == school_id)
+            )).mappings().all()
+            storage_refs = [
+                {"bucket": row["storage_bucket"], "key": row["storage_key"]}
+                for row in docs
+            ]
+            # Child tables first (RESTRICT FKs).
+            await connection.execute(OVERRIDES.delete().where(OVERRIDES.c.school_id == school_id))
+            await connection.execute(RUBRIC.delete().where(RUBRIC.c.school_id == school_id))
+            await connection.execute(FACTS.delete().where(FACTS.c.school_id == school_id))
+            await connection.execute(RUNS.delete().where(RUNS.c.school_id == school_id))
+            # Keep metering rows; detach from school so RESTRICT does not block delete.
+            await connection.execute(
+                update(USAGE).where(USAGE.c.school_id == school_id).values(school_id=None)
+            )
+            await connection.execute(JOBS.delete().where(JOBS.c.school_id == school_id))
+            await connection.execute(DOCUMENTS.delete().where(DOCUMENTS.c.school_id == school_id))
+            await connection.execute(SCHOOLS.delete().where(SCHOOLS.c.id == school_id))
+            return {
+                "school_id": str(school_id),
+                "deleted": True,
+                "documents_removed": len(storage_refs),
+                "storage_refs": storage_refs,
+            }
+
+        result = await self.database.transaction("delete_school", wipe)
+        for ref in result.get("storage_refs") or []:
+            try:
+                if hasattr(self.storage, "delete"):
+                    await self.storage.delete(ref["key"])
+            except Exception:
+                pass
+        result.pop("storage_refs", None)
+        return result
 
     @staticmethod
     async def _latest(connection, document_id):

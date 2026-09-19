@@ -121,6 +121,21 @@ def build_school_router() -> APIRouter:
         school_id = await _documents(request).create_school(payload.name.strip(), str(payload.official_url))
         return SchoolCreated(school_id=school_id)
 
+    @router.delete(
+        "/schools/{school_id}",
+        summary="Delete a school and all of its research data",
+        description=(
+            "Removes rubric factors, raw facts, documents, jobs, and scoring runs for this school. "
+            "Provider usage events are retained with school_id cleared. CRM comparisons must be "
+            "deleted via the CRM school row (school_ai_scores CASCADE)."
+        ),
+    )
+    async def delete_school(school_id: UUID, request: Request):
+        try:
+            return await _documents(request).delete_school(school_id)
+        except DocumentNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+
     @router.post(
         "/schools/{school_id}/documents",
         response_model=DocumentUploadResponse,
