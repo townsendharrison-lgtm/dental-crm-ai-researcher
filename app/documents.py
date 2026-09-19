@@ -61,7 +61,10 @@ class DocumentService:
             return doc, job
 
         doc, job = await self.database.transaction("find_document", find)
-        if job and (not force_refresh or job["status"] in {"pending", "running"}):
+        # Reuse only in-flight (pending/running) or successful extractions. A prior
+        # failed/cancelled job must NOT be treated as a cache hit — re-enqueue it.
+        if job and (job["status"] in {"pending", "running"}
+                    or (job["status"] == "succeeded" and not force_refresh)):
             return {"document_id": doc["id"], "job_id": job["id"], "status": job["status"], "cached": True}
         # Store bytes before the DB transaction. A failed commit leaves a reusable
         # content-addressed object, never a dangling DB record or destructive cleanup.
@@ -71,7 +74,8 @@ class DocumentService:
             await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                                      {"key": f"document-upload:{school_id}:{digest}"})
             current_doc, current_job = await find(connection)
-            if current_job and (not force_refresh or current_job["status"] in {"pending", "running"}):
+            if current_job and (current_job["status"] in {"pending", "running"}
+                                or (current_job["status"] == "succeeded" and not force_refresh)):
                 return {"document_id": current_doc["id"], "job_id": current_job["id"], "status": current_job["status"], "cached": True}
             document_id = current_doc["id"] if current_doc else uuid4()
             if current_doc is None:
