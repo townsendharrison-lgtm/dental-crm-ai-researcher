@@ -62,6 +62,38 @@ class SchoolFactsResponse(BaseModel):
     facts: list[dict]
 
 
+class SchoolDocumentItem(BaseModel):
+    document_id: UUID
+    filename: str
+    source_type: str
+    source_url: str | None = None
+    parsed_status: str
+    byte_size: int | None = None
+    created_at: object | None = None
+    job_id: UUID | None = None
+    job_status: str | None = None
+
+
+class SchoolDocumentsResponse(BaseModel):
+    school_id: UUID
+    documents: list[SchoolDocumentItem]
+    count: int
+
+
+class WebSourceItem(BaseModel):
+    url: str
+    fact_count: int
+    last_seen_at: object | None = None
+
+
+class SchoolSourcesResponse(BaseModel):
+    school_id: UUID
+    documents: list[SchoolDocumentItem]
+    web_sources: list[WebSourceItem]
+    document_count: int
+    web_source_count: int
+
+
 def _documents(request: Request):
     service = getattr(request.app.state, "documents", None)
     if service is None:
@@ -196,6 +228,46 @@ def build_school_router() -> APIRouter:
     async def get_school_facts(school_id: UUID, request: Request):
         facts = await _research(request).load_facts(school_id)
         return SchoolFactsResponse(school_id=school_id, fact_count=len(facts), facts=facts)
+
+    @router.get(
+        "/schools/{school_id}/documents",
+        response_model=SchoolDocumentsResponse,
+        summary="List uploaded documents for a school",
+        description="Returns school_documents rows with the latest extract_document job status for each.",
+    )
+    async def list_school_documents(school_id: UUID, request: Request):
+        try:
+            documents = await _documents(request).list_documents(school_id)
+        except DocumentNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return SchoolDocumentsResponse(
+            school_id=school_id,
+            documents=[SchoolDocumentItem(**doc) for doc in documents],
+            count=len(documents),
+        )
+
+    @router.get(
+        "/schools/{school_id}/sources",
+        response_model=SchoolSourcesResponse,
+        summary="List data sources (documents + crawled web URLs) for a school",
+        description="Aggregates uploaded documents and distinct web source URLs that produced raw facts.",
+    )
+    async def list_school_sources(school_id: UUID, request: Request):
+        try:
+            documents = await _documents(request).list_documents(school_id)
+        except DocumentNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        try:
+            web_sources = await _research(request).list_web_sources(school_id)
+        except ResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return SchoolSourcesResponse(
+            school_id=school_id,
+            documents=[SchoolDocumentItem(**doc) for doc in documents],
+            web_sources=[WebSourceItem(**src) for src in web_sources],
+            document_count=len(documents),
+            web_source_count=len(web_sources),
+        )
 
     @router.get(
         "/documents/{document_id}/facts",

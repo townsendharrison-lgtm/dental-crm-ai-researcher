@@ -73,6 +73,9 @@ def test_document_routes_are_exposed(settings):
     assert "/health" in paths
     assert "/schools/{school_id}/documents" in paths
     assert "/schools/{school_id}/research" in paths
+    assert "/schools/{school_id}/crawl-url" in paths
+    assert "/schools/{school_id}/facts" in paths
+    assert "/schools/{school_id}/sources" in paths
     assert "/schools/{school_id}/rubric/generate" in paths
     assert "/normalization/recompute" in paths
     assert "/jobs/{job_id}" in paths

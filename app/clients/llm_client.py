@@ -200,8 +200,11 @@ class LLMClient:
             {"role": "system", "content": (
                 "You explain a deterministic school-fit score that was already computed in code. "
                 "Do not recalculate, invent factors, or change the score. "
-                "Describe the provided breakdown and skipped factors in clear prose. "
-                "State that the score is a fit score, not an acceptance probability."
+                "Describe the provided breakdown clearly. Factors with method starting with "
+                "'not_met_' were counted as unmet (score 0) because the student profile lacked "
+                "usable evidence — mention that. "
+                "State that the score is a fit score; outcome probabilities (if present) are "
+                "fit-derived estimates, not calibrated admissions odds."
             )},
             {"role": "user", "content": json.dumps({
                 "score": score, "score_kind": "deterministic_fit_score_v1",

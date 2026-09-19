@@ -112,6 +112,27 @@ class ResearchService:
             return [dict(row) for row in rows]
         return await self.database.transaction("read_school_facts", read)
 
+    async def list_web_sources(self, school_id: UUID) -> list[dict]:
+        """Distinct web source URLs that produced facts for this school."""
+        async def read(connection):
+            if not await connection.scalar(select(SCHOOLS.c.id).where(SCHOOLS.c.id == school_id)):
+                raise ResearchNotFound("School does not exist")
+            rows = (await connection.execute(
+                select(
+                    FACTS.c.source_url,
+                    func.count().label("fact_count"),
+                    func.max(FACTS.c.created_at).label("last_seen_at"),
+                )
+                .where(FACTS.c.school_id == school_id, FACTS.c.source_type == "web", FACTS.c.source_url.is_not(None))
+                .group_by(FACTS.c.source_url)
+                .order_by(func.max(FACTS.c.created_at).desc())
+            )).mappings().all()
+            return [
+                {"url": row["source_url"], "fact_count": int(row["fact_count"]), "last_seen_at": row["last_seen_at"]}
+                for row in rows
+            ]
+        return await self.database.transaction("list_web_sources", read)
+
     async def persist_writes(self, task: ResearchTask, token, writes, result):
         async def save(connection):
             owned = await connection.scalar(select(JOBS.c.id).where(self._owned(task.job_id, token)).with_for_update())

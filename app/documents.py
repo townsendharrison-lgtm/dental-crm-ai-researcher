@@ -176,6 +176,31 @@ class DocumentService:
             await self.queue.archive(connection, message_id)
         await self.database.transaction("archive_terminal_document", archive)
 
+    async def list_documents(self, school_id: UUID) -> list[dict]:
+        async def read(connection):
+            if not await connection.scalar(select(SCHOOLS.c.id).where(SCHOOLS.c.id == school_id)):
+                raise DocumentNotFound("School does not exist")
+            rows = (await connection.execute(
+                select(DOCUMENTS).where(DOCUMENTS.c.school_id == school_id)
+                .order_by(DOCUMENTS.c.created_at.desc())
+            )).mappings().all()
+            documents = []
+            for row in rows:
+                job = await self._latest(connection, row["id"])
+                documents.append({
+                    "document_id": row["id"],
+                    "filename": row["filename"],
+                    "source_type": row["source_type"],
+                    "source_url": row["source_url"],
+                    "parsed_status": row["parsed_status"],
+                    "byte_size": row["byte_size"],
+                    "created_at": row["created_at"],
+                    "job_id": job["id"] if job else None,
+                    "job_status": job["status"] if job else None,
+                })
+            return documents
+        return await self.database.transaction("list_school_documents", read)
+
     async def facts(self, document_id):
         async def read(connection):
             job = await self._latest(connection, document_id)

@@ -40,7 +40,17 @@ class SkippedFactor(BaseModel):
         "non_numeric_student_value",
         "zero_weight",
         "not_scoring_eligible",
+        "dat_scale_mismatch",
     ]
+
+
+class OutcomeProbabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    interview_probability: float = Field(ge=0, le=100)
+    acceptance_probability: float = Field(ge=0, le=100)
+    waitlist_probability: float = Field(ge=0, le=100)
+    reject_probability: float = Field(ge=0, le=100)
+    probability_kind: Literal["fit_score_derived_v1"] = "fit_score_derived_v1"
 
 
 class ScoringResult(BaseModel):
@@ -54,6 +64,7 @@ class ScoringResult(BaseModel):
     weight_mass_used: float
     reasoning: str
     scoring_run_id: UUID | None = None
+    probabilities: OutcomeProbabilities | None = None
 
 
 # Kept for older Phase 6 gate tests / docs references.

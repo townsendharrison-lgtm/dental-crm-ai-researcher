@@ -140,7 +140,7 @@ def build_rubric_router() -> APIRouter:
         "/schools/{school_id}/score",
         response_model=ScoringResult,
         summary="Score a student against an approved school rubric",
-        description="Requires rubric_status=approved. Computes a deterministic fit score 0–100 in code (not an acceptance probability), skips missing student factors, asks GPT-4o only to narrate the breakdown, and persists scoring_runs.",
+        description="Requires rubric_status=approved. Computes a deterministic fit score 0–100 in code (not calibrated admissions odds). Every scoring-eligible rubric factor is considered; missing student evidence counts as not met (0). Returns fit-derived interview/acceptance/waitlist/reject probability estimates. GPT-4o only narrates the breakdown.",
         responses={409: {"description": "Rubric not approved"}},
     )
     async def score_student(school_id: UUID, profile: StudentProfile, request: Request):
