@@ -79,8 +79,10 @@ class DocumentWorker:
             await self.service.checkpoint(task, token, result, chunk_index=index)
             return {"type": "BudgetExceeded", "detail": str(exc)}
         except (ExtractionFailed, APIError) as exc:
-            saved.update(status="failed", error_type=type(exc).__name__)
-            await self.service.checkpoint(task, token, result, chunk_index=index)
+            # Soft-skip: one bad chunk must not throw away facts already extracted.
+            # Grounding/schema failures are equivalent to "no reliable facts here".
+            saved.update(status="succeeded", skipped="extraction_failed", error_type=type(exc).__name__)
+            await self.service.checkpoint(task, token, result, chunk_index=index, facts=[])
             return None
 
     async def _process_chunk_mode(self, result, taxonomy, task, token):
@@ -96,8 +98,11 @@ class DocumentWorker:
             fatal = await self._extract_chunk(chunk, taxonomy, saved, task, token, result, index)
             if fatal:
                 return result, fatal
-        failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
-        return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+        skipped = [c["index"] for c in result["chunks"] if c.get("skipped") == "extraction_failed"]
+        if skipped:
+            result["warnings"] = {"type": "ChunkExtractionSkipped", "chunk_indexes": skipped}
+            await self.service.checkpoint(task, token, result)
+        return result, None
 
     async def _process_retrieve_mode(self, result, taxonomy, task, token):
         settings = self.service.settings
@@ -118,17 +123,23 @@ class DocumentWorker:
             pending.append(chunk)
 
         if not pending:
-            failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
-            return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+            return result, None
 
-        assignments = await asyncio.to_thread(
-            self.retriever,
-            pending,
-            taxonomy,
-            api_key=settings.openai_api_key.get_secret_value(),
-            embed_model_name=settings.openai_embed_model,
-            top_k=settings.document_retrieve_top_k,
-        )
+        try:
+            assignments = await asyncio.to_thread(
+                self.retriever,
+                pending,
+                taxonomy,
+                api_key=settings.openai_api_key.get_secret_value(),
+                embed_model_name=settings.openai_embed_model,
+                top_k=settings.document_retrieve_top_k,
+            )
+        except Exception as exc:
+            # Embedding/index outage → fall back to legacy per-chunk extraction.
+            result["retrieve"] = {"mode": "fallback_chunk", "error": type(exc).__name__, "detail": str(exc)[:300]}
+            await self.service.checkpoint(task, token, result)
+            return await self._process_chunk_mode(result, taxonomy, task, token)
+
         selected = {item.chunk_index: item.categories for item in assignments}
         result["retrieve"] = {
             "mode": "llamaindex",
@@ -155,8 +166,11 @@ class DocumentWorker:
             if fatal:
                 return result, fatal
 
-        failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
-        return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+        skipped = [c["index"] for c in result["chunks"] if c.get("skipped") == "extraction_failed"]
+        if skipped:
+            result["warnings"] = {"type": "ChunkExtractionSkipped", "chunk_indexes": skipped}
+            await self.service.checkpoint(task, token, result)
+        return result, None
 
     async def _process(self, task, token, job, document):
         result = job["result"] or {}

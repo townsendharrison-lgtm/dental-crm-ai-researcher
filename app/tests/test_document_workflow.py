@@ -145,16 +145,19 @@ async def test_worker_persists_extracted_facts_without_fabrication(settings, tax
     assert calls and "avg_gpa" in str(calls[0])
 
 
-async def test_worker_marks_chunk_failure_without_guessing(settings, taxonomy):
+async def test_worker_soft_skips_chunk_extraction_failure(settings, taxonomy):
     service = memory_service(settings, taxonomy)
     llm, _ = make_llm(settings, [response([], raw="{not-json", finish="length")])
     try:
         outcome = await DocumentWorker(service, llm, heartbeat=False).run_once()
     finally:
         await llm.close()
-    assert outcome["status"] == "failed"
+    assert outcome["status"] == "succeeded"
     assert service.state["facts"] == []
-    assert service.state["job"]["error"]["type"] == "ChunkExtractionFailed"
+    chunk = service.state["job"]["result"]["chunks"][0]
+    assert chunk["skipped"] == "extraction_failed"
+    assert service.state["job"]["error"] is None
+    assert service.state["job"]["result"]["warnings"]["type"] == "ChunkExtractionSkipped"
 
 
 async def test_upload_idempotency_returns_cached_job(settings, taxonomy):
