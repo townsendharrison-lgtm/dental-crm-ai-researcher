@@ -6,7 +6,7 @@ from app.clients.llm_client import LLMClient, ExtractionFailed
 from app.clients.search_client import SearchClient
 from app.clients.web_fetch_client import WebFetchClient, WebFetchError
 from app.factor_taxonomy import FactorDefinition, FactorTaxonomy
-from app.source_allowlist import DomainRejected, allowed_hosts_for_school, is_allowed_url
+from app.source_allowlist import DomainRejected, allowed_hosts_for_school, hostname_of, is_allowed_url
 
 
 @dataclass(frozen=True)
@@ -141,6 +141,66 @@ class WebResearchAgent:
             "gaps": [gap.__dict__ for gap in gaps[: self.settings.research_max_gaps]],
             "remaining_gaps": sorted(remaining),
             "rejected_urls": rejected,
+            "outcomes": outcomes,
+            "writes": writes,
+        }
+
+    async def research_url(
+        self, *, school_name: str, official_url: str, url: str, gaps: list[GapFactor],
+        force_refresh: bool = False,
+    ) -> dict:
+        """Fetch one admin-provided URL and extract facts from it.
+
+        Unlike research_gaps (which searches allow-listed sources for gaps), this
+        trusts an explicit URL. The URL's own host is added to the allow-list so a
+        school's official page (or another admin-chosen page) can be fetched. All
+        taxonomy factors are extracted so the page enriches whatever it contains.
+        """
+        try:
+            target_host = hostname_of(url)
+        except DomainRejected:
+            return {"gaps": [], "remaining_gaps": [], "rejected_urls": [{"url": url, "reason": "invalid_url"}],
+                    "outcomes": [], "writes": []}
+        allowed = allowed_hosts_for_school(official_url, extra_domains=(target_host,))
+        gap_keys = {gap.key for gap in gaps}
+        # Prefer filling known gaps; if none, extract the full taxonomy from the page.
+        target_keys = gap_keys or {factor.key for factor in self.taxonomy.factors}
+        extract_taxonomy = subset_taxonomy(self.taxonomy, target_keys)
+
+        outcomes: list[dict] = []
+        writes: list[ResearchFactWrite] = []
+        try:
+            page = await self.fetch.fetch(url, allowed_hosts=allowed, force_refresh=force_refresh)
+        except (WebFetchError, DomainRejected) as exc:
+            return {"gaps": [], "remaining_gaps": sorted(target_keys),
+                    "rejected_urls": [{"url": url, "reason": type(exc).__name__}],
+                    "outcomes": [{"url": url, "status": "fetch_failed", "error_type": type(exc).__name__}],
+                    "writes": []}
+
+        extracted_keys: list[str] = []
+        for chunk in chunk_page(page.text, url=page.url, title=page.title,
+                                chunk_chars=self.settings.research_chunk_chars):
+            try:
+                extraction = await self.llm.extract(chunk, extract_taxonomy)
+            except ExtractionFailed as exc:
+                outcomes.append({"url": page.url, "status": "extract_failed",
+                                 "error_type": type(exc).__name__, "cached": page.cached})
+                continue
+            for fact in extraction.result.facts:
+                if fact.factor_key not in target_keys:
+                    continue
+                writes.append(ResearchFactWrite(
+                    factor_key=fact.factor_key, value=fact.value, unit=fact.unit,
+                    confidence=fact.confidence, raw_text_snippet=fact.raw_text_snippet,
+                    source_url=page.url, section=chunk.section,
+                ))
+                extracted_keys.append(fact.factor_key)
+        outcomes.append({"url": page.url, "status": "fetched", "cached": page.cached,
+                         "fetch_method": page.fetch_method, "extracted_keys": extracted_keys})
+        return {
+            "gaps": [gap.__dict__ for gap in gaps],
+            "remaining_gaps": sorted(target_keys - set(extracted_keys)),
+            "rejected_urls": [],
             "outcomes": outcomes,
             "writes": writes,
         }

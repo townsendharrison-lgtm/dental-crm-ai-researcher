@@ -51,6 +51,17 @@ class DocumentFactsResponse(BaseModel):
     facts: list[dict]
 
 
+class CrawlUrlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: HttpUrl
+
+
+class SchoolFactsResponse(BaseModel):
+    school_id: UUID
+    fact_count: int
+    facts: list[dict]
+
+
 def _documents(request: Request):
     service = getattr(request.app.state, "documents", None)
     if service is None:
@@ -155,6 +166,36 @@ def build_school_router() -> APIRouter:
             except ResearchNotFound:
                 pass
         raise HTTPException(status_code=404, detail="Job does not exist")
+
+    @router.post(
+        "/schools/{school_id}/crawl-url",
+        response_model=ResearchEnqueueResponse,
+        summary="Fetch and extract facts from one admin-provided URL",
+        description="Enqueues a research job that fetches a specific URL (its host is trusted) and extracts taxonomy facts from it, writing grounded school_raw_facts with source_url. Use for a school's official page or another admin-chosen source.",
+    )
+    async def crawl_url(
+        school_id: UUID,
+        payload: CrawlUrlRequest,
+        request: Request,
+        force_refresh: Annotated[bool, Query()] = False,
+    ):
+        try:
+            result = await _research(request).enqueue(
+                school_id, force_refresh=force_refresh, target_url=str(payload.url),
+            )
+        except ResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        return ResearchEnqueueResponse(**result)
+
+    @router.get(
+        "/schools/{school_id}/facts",
+        response_model=SchoolFactsResponse,
+        summary="Read all extracted raw facts for a school",
+        description="Returns every school_raw_facts row for the school (from document ingest, targeted URL crawl and web research), including source_type and source_url provenance.",
+    )
+    async def get_school_facts(school_id: UUID, request: Request):
+        facts = await _research(request).load_facts(school_id)
+        return SchoolFactsResponse(school_id=school_id, fact_count=len(facts), facts=facts)
 
     @router.get(
         "/documents/{document_id}/facts",

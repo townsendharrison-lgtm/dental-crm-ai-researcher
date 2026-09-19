@@ -36,7 +36,7 @@ class ResearchService:
         self.fetch = fetch or WebFetchClient(settings, database)
         self.llm = llm or LLMClient(settings)
 
-    async def enqueue(self, school_id: UUID, *, force_refresh: bool = False):
+    async def enqueue(self, school_id: UUID, *, force_refresh: bool = False, target_url: str | None = None):
         async def find(connection):
             school = (await connection.execute(select(SCHOOLS).where(SCHOOLS.c.id == school_id))).mappings().first()
             if school is None:
@@ -47,24 +47,29 @@ class ResearchService:
             return dict(school), dict(job) if job else None
 
         school, job = await self.database.transaction("find_research_job", find)
-        if job and job["status"] in {"pending", "running"} and not force_refresh:
+        # A targeted-URL crawl is always a fresh job (it fetches a specific page),
+        # so it does not dedupe against an in-flight gap-research job.
+        if job and job["status"] in {"pending", "running"} and not force_refresh and not target_url:
             return {"job_id": job["id"], "status": job["status"], "cached": True}
 
         async def enqueue(connection):
             await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                                      {"key": f"research-enqueue:{school_id}"})
             _, current = await find(connection)
-            if current and current["status"] in {"pending", "running"} and not force_refresh:
+            if current and current["status"] in {"pending", "running"} and not force_refresh and not target_url:
                 return {"job_id": current["id"], "status": current["status"], "cached": True}
             job_id = uuid4()
+            payload = {
+                "school_id": str(school_id), "official_url": school["official_url"],
+                "school_name": school["name"], "force_refresh": force_refresh,
+                "taxonomy_hash": self.taxonomy.content_hash,
+                "confidence_floor": self.settings.research_confidence_floor,
+            }
+            if target_url:
+                payload["target_url"] = target_url
             await connection.execute(insert(JOBS).values(
                 id=job_id, school_id=school_id, type="research_school", created_at=func.clock_timestamp(),
-                payload={
-                    "school_id": str(school_id), "official_url": school["official_url"],
-                    "school_name": school["name"], "force_refresh": force_refresh,
-                    "taxonomy_hash": self.taxonomy.content_hash,
-                    "confidence_floor": self.settings.research_confidence_floor,
-                },
+                payload=payload,
             ))
             await self.queue.send(connection, ResearchTask(job_id=job_id, school_id=school_id))
             return {"job_id": job_id, "status": "pending", "cached": False}
@@ -148,14 +153,20 @@ class ResearchService:
             await self.queue.archive(connection, message_id)
         await self.database.transaction("archive_terminal_research", archive)
 
-    async def run_research(self, school: dict, *, force_refresh: bool = False) -> dict:
+    async def run_research(self, school: dict, *, force_refresh: bool = False, target_url: str | None = None) -> dict:
         facts = await self.load_facts(school["id"])
         gaps = compute_gaps(self.taxonomy, facts, confidence_floor=self.settings.research_confidence_floor)
         agent = WebResearchAgent(self.settings, self.search, self.fetch, self.llm, self.taxonomy)
-        outcome = await agent.research_gaps(
-            school_name=school["name"], official_url=school["official_url"],
-            gaps=gaps, force_refresh=force_refresh,
-        )
+        if target_url:
+            outcome = await agent.research_url(
+                school_name=school["name"], official_url=school["official_url"],
+                url=target_url, gaps=gaps, force_refresh=force_refresh,
+            )
+        else:
+            outcome = await agent.research_gaps(
+                school_name=school["name"], official_url=school["official_url"],
+                gaps=gaps, force_refresh=force_refresh,
+            )
         # Strip write objects for JSON job result; persistence uses the dataclass list.
         serializable = {
             "gaps": outcome["gaps"],

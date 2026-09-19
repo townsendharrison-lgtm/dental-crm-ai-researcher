@@ -67,9 +67,12 @@ class ResearchWorker:
 
     async def _process(self, task, token, job, school):
         force_refresh = bool(job["payload"].get("force_refresh"))
+        target_url = job["payload"].get("target_url")
         school_token = current_school_id.set(job.get("school_id") or task.school_id)
         try:
-            result, writes = await self.service.run_research(school, force_refresh=force_refresh)
+            result, writes = await self.service.run_research(
+                school, force_refresh=force_refresh, target_url=target_url,
+            )
             await self.service.persist_writes(task, token, writes, result)
             return result, None
         except BudgetExceeded as exc:
