@@ -7,6 +7,7 @@ from uuid import uuid4
 from openai import APIError
 from sqlalchemy import text
 
+from app.clients.chunk_retriever import assign_chunks_by_category, taxonomy_for_categories
 from app.clients.fetch_client import DocumentChunk, DocumentError
 from app.clients.llm_client import ExtractionFailed
 from app.clients.operations import external_call
@@ -16,9 +17,11 @@ from app.factor_taxonomy import FactorTaxonomy
 
 
 class DocumentWorker:
-    def __init__(self, service, llm, *, heartbeat=True):
+    def __init__(self, service, llm, *, heartbeat=True, retriever=None):
         self.service, self.llm = service, llm
         self.heartbeat = heartbeat
+        # Optional override for tests (sync callable with assign_chunks_by_category signature).
+        self.retriever = retriever or assign_chunks_by_category
 
     async def _keep_alive(self, connection, message_id):
         while True:
@@ -65,6 +68,96 @@ class DocumentWorker:
             return {"job_id": task.job_id, "status": "failed" if error else "succeeded",
                     "fact_count": sum(len(c.get("fact_ids", [])) for c in result.get("chunks", []))}
 
+    async def _extract_chunk(self, chunk, taxonomy, saved, task, token, result, index):
+        try:
+            extraction = await self.llm.extract(chunk, taxonomy)
+            saved.update(status="succeeded", usage=extraction.usage)
+            await self.service.checkpoint(task, token, result, chunk_index=index, facts=extraction.result.facts)
+            return None
+        except BudgetExceeded as exc:
+            saved.update(status="failed", error_type=type(exc).__name__)
+            await self.service.checkpoint(task, token, result, chunk_index=index)
+            return {"type": "BudgetExceeded", "detail": str(exc)}
+        except (ExtractionFailed, APIError) as exc:
+            saved.update(status="failed", error_type=type(exc).__name__)
+            await self.service.checkpoint(task, token, result, chunk_index=index)
+            return None
+
+    async def _process_chunk_mode(self, result, taxonomy, task, token):
+        min_chars = self.service.settings.document_min_chunk_chars
+        for index, saved in enumerate(result["chunks"]):
+            if saved["status"] in {"succeeded", "failed"}:
+                continue
+            chunk = DocumentChunk(**{key: saved[key] for key in ("index", "text", "page_number", "section", "used_ocr")})
+            if len("".join(chunk.text.split())) < min_chars:
+                saved.update(status="succeeded", skipped="low_content")
+                await self.service.checkpoint(task, token, result, chunk_index=index, facts=[])
+                continue
+            fatal = await self._extract_chunk(chunk, taxonomy, saved, task, token, result, index)
+            if fatal:
+                return result, fatal
+        failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
+        return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+
+    async def _process_retrieve_mode(self, result, taxonomy, task, token):
+        settings = self.service.settings
+        min_chars = settings.document_min_chunk_chars
+        pending = []
+        for index, saved in enumerate(result["chunks"]):
+            if saved["status"] in {"succeeded", "failed"}:
+                continue
+            # Use list position as chunk.index so retrieval assignments match checkpoints.
+            chunk = DocumentChunk(
+                index=index, text=saved["text"], page_number=saved["page_number"],
+                section=saved["section"], used_ocr=saved["used_ocr"],
+            )
+            if len("".join(chunk.text.split())) < min_chars:
+                saved.update(status="succeeded", skipped="low_content")
+                await self.service.checkpoint(task, token, result, chunk_index=index, facts=[])
+                continue
+            pending.append(chunk)
+
+        if not pending:
+            failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
+            return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+
+        assignments = await asyncio.to_thread(
+            self.retriever,
+            pending,
+            taxonomy,
+            api_key=settings.openai_api_key.get_secret_value(),
+            embed_model_name=settings.openai_embed_model,
+            top_k=settings.document_retrieve_top_k,
+        )
+        selected = {item.chunk_index: item.categories for item in assignments}
+        result["retrieve"] = {
+            "mode": "llamaindex",
+            "top_k": settings.document_retrieve_top_k,
+            "embed_model": settings.openai_embed_model,
+            "selected_chunks": [
+                {"chunk_index": index, "categories": list(categories)}
+                for index, categories in selected.items()
+            ],
+        }
+        await self.service.checkpoint(task, token, result)
+
+        for chunk in pending:
+            saved = result["chunks"][chunk.index]
+            if saved["status"] in {"succeeded", "failed"}:
+                continue
+            categories = selected.get(chunk.index)
+            if not categories:
+                saved.update(status="succeeded", skipped="not_retrieved")
+                await self.service.checkpoint(task, token, result, chunk_index=chunk.index, facts=[])
+                continue
+            subset = taxonomy_for_categories(taxonomy, categories)
+            fatal = await self._extract_chunk(chunk, subset, saved, task, token, result, chunk.index)
+            if fatal:
+                return result, fatal
+
+        failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
+        return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+
     async def _process(self, task, token, job, document):
         result = job["result"] or {}
         school_token = current_school_id.set(job.get("school_id"))
@@ -84,29 +177,9 @@ class DocumentWorker:
                 ]}
                 # Save parsed text before any model request. Restart uses this checkpoint.
                 await self.service.checkpoint(task, token, result)
-            min_chars = self.service.settings.document_min_chunk_chars
-            for index, saved in enumerate(result["chunks"]):
-                if saved["status"] in {"succeeded", "failed"}:
-                    continue
-                chunk = DocumentChunk(**{key: saved[key] for key in ("index", "text", "page_number", "section", "used_ocr")})
-                # Skip near-empty chunks (boilerplate/page numbers) without an LLM call.
-                if len("".join(chunk.text.split())) < min_chars:
-                    saved.update(status="succeeded", skipped="low_content")
-                    await self.service.checkpoint(task, token, result, chunk_index=index, facts=[])
-                    continue
-                try:
-                    extraction = await self.llm.extract(chunk, taxonomy)
-                    saved.update(status="succeeded", usage=extraction.usage)
-                    await self.service.checkpoint(task, token, result, chunk_index=index, facts=extraction.result.facts)
-                except BudgetExceeded as exc:
-                    saved.update(status="failed", error_type=type(exc).__name__)
-                    await self.service.checkpoint(task, token, result, chunk_index=index)
-                    return result, {"type": "BudgetExceeded", "detail": str(exc)}
-                except (ExtractionFailed, APIError) as exc:
-                    saved.update(status="failed", error_type=type(exc).__name__)
-                    await self.service.checkpoint(task, token, result, chunk_index=index)
-            failures = [c["index"] for c in result["chunks"] if c["status"] == "failed"]
-            return result, ({"type": "ChunkExtractionFailed", "chunk_indexes": failures} if failures else None)
+            if self.service.settings.document_extract_mode == "retrieve":
+                return await self._process_retrieve_mode(result, taxonomy, task, token)
+            return await self._process_chunk_mode(result, taxonomy, task, token)
         except DocumentError as exc:
             return result, {"type": type(exc).__name__}
         finally:

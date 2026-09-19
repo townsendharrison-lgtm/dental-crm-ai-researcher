@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # page numbers, headers) — they rarely contain facts and waste an LLM call.
     document_min_chunk_chars: int = Field(default=180, ge=0, le=2000)
     document_max_chunks: int = Field(default=1000, ge=1, le=5000)
+    # "retrieve" (LlamaIndex): embed chunks, pull top-k per taxonomy category, then
+    # extract only those chunks against a category subset — far fewer/cheaper GPT calls.
+    # "chunk": legacy path — every eligible chunk gets the full taxonomy.
+    document_extract_mode: Literal["retrieve", "chunk"] = "retrieve"
+    document_retrieve_top_k: int = Field(default=3, ge=1, le=10)
+    openai_embed_model: str = Field(default="text-embedding-3-small", min_length=1)
     ocr_timeout_seconds: float = Field(default=45, gt=0, le=120)
     tesseract_cmd: str = "tesseract"
     tavily_api_key: SecretStr = SecretStr("")
