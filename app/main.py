@@ -13,9 +13,12 @@ from app.api.routes_jobs import build_jobs_router
 from app.api.routes_normalization import build_normalization_router
 from app.api.routes_rubrics import build_rubric_router
 from app.api.routes_schools import build_school_router
+from app.clients.llm_client import LLMClient
 from app.clients.queue_client import QueueClient
 from app.clients.storage_client import StorageClient
 from app.clients.usage_guard import get_usage_guard
+from app.workers.document_worker import DocumentWorker
+from app.workers.research_worker import ResearchWorker
 from app.config import Settings, get_settings
 from app.db.session import ConfigurationMissing, Database
 from app.documents import DocumentService
@@ -32,6 +35,23 @@ class HealthReport(BaseModel):
     errors: dict[str, str]
 
 
+async def _worker_loop(name: str, worker, poll_seconds: float):
+    """Continuously drain one queue in-process. Never crashes the loop on error."""
+    log = logging.getLogger(f"school_ai.inprocess.{name}")
+    log.info("in-process %s worker started", name)
+    while True:
+        try:
+            outcome = await worker.run_once()
+        except asyncio.CancelledError:
+            log.info("in-process %s worker stopped", name)
+            raise
+        except Exception as exc:  # transient DB/LLM/network errors must not kill the loop
+            log.warning("in-process %s worker error (%s)", name, type(exc).__name__)
+            outcome = None
+        if not outcome or (isinstance(outcome, dict) and outcome.get("status") in {"idle", "busy"}):
+            await asyncio.sleep(poll_seconds)
+
+
 def create_app(settings: Settings | None = None, *, database=None, queue=None, storage=None,
                documents=None, research=None, normalization=None, rubrics=None, scoring=None,
                jobs=None) -> FastAPI:
@@ -44,8 +64,29 @@ def create_app(settings: Settings | None = None, *, database=None, queue=None, s
     @asynccontextmanager
     async def lifespan(app):
         logging.basicConfig(level=settings.log_level)
+        worker_tasks: list[asyncio.Task] = []
+        inprocess_llm = None
+        if settings.run_inprocess_workers:
+            documents = getattr(app.state, "documents", None)
+            research = getattr(app.state, "research", None)
+            if documents is not None:
+                inprocess_llm = LLMClient(settings)
+                worker_tasks.append(asyncio.create_task(_worker_loop(
+                    "document", DocumentWorker(documents, inprocess_llm), settings.worker_poll_seconds)))
+            if research is not None:
+                worker_tasks.append(asyncio.create_task(_worker_loop(
+                    "research", ResearchWorker(research), settings.worker_poll_seconds)))
+            if not worker_tasks:
+                logging.getLogger("school_ai").warning(
+                    "run_inprocess_workers is set but no document/research service is configured")
         yield
+        for task in worker_tasks:
+            task.cancel()
+        if worker_tasks:
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
         closers = [database.close(), storage.close()]
+        if inprocess_llm is not None:
+            closers.append(inprocess_llm.close())
         for name in ("research", "rubrics", "scoring"):
             service = getattr(app.state, name, None)
             if service is not None and hasattr(service, "close"):

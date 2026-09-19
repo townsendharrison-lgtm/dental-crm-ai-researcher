@@ -86,7 +86,8 @@ def make_engine(settings: Settings):
     # asyncpg uses an SSL context rather than libpq's sslmode query option.
     url = url.difference_update_query(["sslmode"])
     return create_async_engine(
-        url, pool_pre_ping=True, pool_size=3, max_overflow=2, hide_parameters=True,
+        url, pool_pre_ping=True, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow,
+        hide_parameters=True,
         connect_args={"ssl": make_ssl_context(settings), "timeout": settings.external_timeout_seconds,
                       "command_timeout": settings.external_timeout_seconds},
     )

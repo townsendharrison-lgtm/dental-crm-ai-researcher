@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     research_queue_name: str = Field(default="school_ai_research", pattern=r"^[a-z][a-z0-9_]{0,46}$")
     queue_visibility_seconds: int = Field(default=60, ge=10, le=3600)
     worker_poll_seconds: float = Field(default=2, ge=0.1, le=60)
+    # Run the document + research workers inside the web process (no separate
+    # worker service needed). Suitable for low-volume single-admin deployments.
+    run_inprocess_workers: bool = False
+    # DB connection pool. Headroom matters when in-process workers run alongside
+    # request handling (each active job can hold a lock connection + transactions).
+    db_pool_size: int = Field(default=5, ge=1, le=20)
+    db_max_overflow: int = Field(default=5, ge=0, le=20)
     page_cache_ttl_days: int = Field(default=30, ge=1, le=365)
     research_confidence_floor: float = Field(default=0.5, ge=0, le=1)
     research_max_gaps: int = Field(default=20, ge=1, le=131)
