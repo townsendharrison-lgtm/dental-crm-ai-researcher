@@ -142,10 +142,13 @@ async def test_agent_writes_facts_with_real_source_urls(settings, taxonomy):
             ]
 
     class FakeFetch:
-        async def fetch(self, url, *, allowed_hosts, force_refresh=False):
+        async def fetch(self, url, *, allowed_hosts, force_refresh=False, collect_links=False):
             assert url == school_url
-            return FetchedPage(url=school_url, title="Admissions", text=page_text,
-                               content_hash="c" * 64, fetch_method="httpx", cached=False)
+            return FetchedPage(
+                url=school_url, title="Admissions", text=page_text,
+                content_hash="c" * 64, fetch_method="httpx", cached=False,
+                links=(),
+            )
 
     llm, _ = make_llm(settings, [response([
         fact(raw_text_snippet="Average overall GPA 3.7", page_number=None),
@@ -180,6 +183,27 @@ def test_research_endpoint_enqueues_job(settings):
     assert response.status_code == 200
     assert response.json()["status"] == "pending"
     research.enqueue.assert_awaited_once()
+
+
+def test_extract_same_host_links_prefers_admissions_paths():
+    from app.clients.web_fetch_client import extract_same_host_links, prioritize_crawl_urls
+    html = """
+    <html><body>
+      <a href="/about">About</a>
+      <a href="/admissions/requirements">Requirements</a>
+      <a href="https://other.edu/x">Other</a>
+      <a href="/brochure.pdf">PDF</a>
+    </body></html>
+    """
+    allowed = frozenset({"school.edu"})
+    links = extract_same_host_links(html, "https://school.edu/", allowed)
+    assert "https://school.edu/admissions/requirements" in links
+    assert "https://school.edu/about" in links
+    assert all("other.edu" not in u for u in links)
+    assert all(not u.endswith(".pdf") for u in links)
+    ordered = prioritize_crawl_urls(links + ["https://school.edu/random-page"])
+    assert ordered[0].endswith("/admissions/requirements") or "admissions" in ordered[0]
+    assert ordered[-1].endswith("/random-page")
 
 
 def test_subset_taxonomy_keeps_only_requested_keys(taxonomy):

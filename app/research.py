@@ -1,4 +1,8 @@
-"""School web research jobs: gap analysis → allow-listed search/fetch → raw facts."""
+"""School research jobs: admin URL deep-crawl (same-host subpages) → raw facts.
+
+Multi-site search is disabled. Admins upload documents or crawl an explicit URL
+(typically the school's official site).
+"""
 from datetime import datetime, timezone
 import json
 from uuid import UUID, uuid4, uuid5

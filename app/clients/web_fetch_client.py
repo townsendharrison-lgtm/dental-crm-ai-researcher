@@ -1,8 +1,9 @@
 """HTTP page fetch + trafilatura extraction with optional Playwright fallback and TTL cache."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 import hashlib
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 import trafilatura
@@ -12,9 +13,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.clients.operations import external_call
 from app.config import Settings
 from app.db.models import PageFetchCache
-from app.source_allowlist import assert_allowed_url
+from app.source_allowlist import assert_allowed_url, hostname_of, is_allowed_url
 
 CACHE = PageFetchCache.__table__
+
+# Prefer admissions-related paths when expanding a site crawl.
+_PRIORITY_PATH_TOKENS = (
+    "admission", "apply", "requirement", "prerequisite", "dds", "dmd",
+    "dental", "academ", "gpa", "dat", "tuition", "cost", "aid", "curriculum",
+    "mission", "about", "faq", "class-profile", "incoming", "how-to-apply",
+)
 
 
 class WebFetchError(RuntimeError):
@@ -29,6 +37,20 @@ class FetchedPage:
     content_hash: str
     fetch_method: str
     cached: bool
+    links: tuple[str, ...] = field(default_factory=tuple)
+
+
+class _HrefCollector(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "a":
+            return
+        for key, value in attrs:
+            if key.lower() == "href" and value:
+                self.hrefs.append(value.strip())
 
 
 def normalize_url(url: str) -> str:
@@ -41,6 +63,66 @@ def normalize_url(url: str) -> str:
 
 def url_hash(url: str) -> str:
     return hashlib.sha256(normalize_url(url).encode()).hexdigest()
+
+
+def extract_same_host_links(html: str, base_url: str, allowed_hosts: frozenset[str]) -> list[str]:
+    """Collect same-host http(s) links from page HTML for deep crawl expansion."""
+    collector = _HrefCollector()
+    try:
+        collector.feed(html or "")
+    except Exception:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for href in collector.hrefs:
+        if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
+            continue
+        absolute = urljoin(base_url, href)
+        parts = urlsplit(absolute)
+        if parts.scheme not in {"http", "https"}:
+            continue
+        clean = urlunsplit((parts.scheme, parts.netloc, parts.path or "/", parts.query, ""))
+        try:
+            if not is_allowed_url(clean, allowed_hosts):
+                continue
+        except Exception:
+            continue
+        try:
+            if hostname_of(clean) != hostname_of(base_url) and hostname_of(clean) not in allowed_hosts:
+                continue
+        except Exception:
+            continue
+        normalized = normalize_url(clean)
+        if normalized in seen:
+            continue
+        path_lower = urlsplit(normalized).path.lower()
+        if path_lower.endswith((
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".zip", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp",
+            ".mp4", ".mp3", ".css", ".js",
+        )):
+            continue
+        seen.add(normalized)
+        found.append(normalized)
+    return found
+
+
+def prioritize_crawl_urls(urls: list[str]) -> list[str]:
+    def rank(url: str) -> tuple:
+        path = urlsplit(url).path.lower()
+        # Stronger boost for admissions/apply paths than generic "about".
+        if any(token in path for token in (
+            "admission", "apply", "requirement", "prerequisite", "how-to-apply",
+            "class-profile", "incoming",
+        )):
+            priority = 0
+        elif any(token in path for token in _PRIORITY_PATH_TOKENS):
+            priority = 1
+        else:
+            priority = 2
+        return (priority, len(path), url)
+
+    return sorted(urls, key=rank)
 
 
 class WebFetchClient:
@@ -85,6 +167,7 @@ class WebFetchClient:
         return FetchedPage(
             url=row["url"], title=row["title"], text=row["content_text"],
             content_hash=row["content_hash"], fetch_method=row["fetch_method"], cached=True,
+            links=(),
         )
 
     async def put_cache(self, page: FetchedPage):
@@ -157,9 +240,12 @@ class WebFetchClient:
         except Exception:
             raise WebFetchError("Playwright page fetch failed") from None
 
-    async def fetch(self, url: str, *, allowed_hosts: frozenset[str], force_refresh: bool = False) -> FetchedPage:
+    async def fetch(
+        self, url: str, *, allowed_hosts: frozenset[str], force_refresh: bool = False,
+        collect_links: bool = False,
+    ) -> FetchedPage:
         assert_allowed_url(url, allowed_hosts)
-        if not force_refresh:
+        if not force_refresh and not collect_links:
             cached = await self.get_cached(url)
             if cached is not None:
                 return cached
@@ -170,15 +256,17 @@ class WebFetchClient:
         if not text or len(text) < self.settings.research_min_page_chars:
             rendered = await self._playwright_html(url)
             if rendered:
+                html = rendered
                 text, title = self._extract_text(rendered, url)
                 method = "playwright"
         if not text or len(text) < self.settings.research_min_page_chars:
             raise WebFetchError("Extracted page text is empty or too short")
 
+        links = tuple(extract_same_host_links(html, url, allowed_hosts)) if collect_links else ()
         page = FetchedPage(
             url=normalize_url(url), title=title, text=text,
             content_hash=hashlib.sha256(text.encode()).hexdigest(),
-            fetch_method=method, cached=False,
+            fetch_method=method, cached=False, links=links,
         )
         await self.put_cache(page)
         return page
