@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     openai_model: Literal["gpt-4o"] = "gpt-4o"
     openai_timeout_seconds: float = Field(default=60, gt=0, le=180)
+    # SDK-level retries honor OpenAI's Retry-After header (correct waits for
+    # per-minute TPM/RPM rate limits, which our short external_call backoff can't).
+    openai_max_retries: int = Field(default=4, ge=0, le=8)
     openai_max_output_tokens: int = Field(default=4000, ge=256, le=16384)
     document_max_bytes: int = Field(default=25_000_000, ge=1024, le=100_000_000)
     document_max_pages: int = Field(default=300, ge=1, le=1000)

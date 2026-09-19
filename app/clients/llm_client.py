@@ -47,7 +47,8 @@ class LLMClient:
             if not self.settings.openai_api_key.get_secret_value():
                 raise ConfigurationMissing("OPENAI_API_KEY is missing")
             self._client = AsyncOpenAI(api_key=self.settings.openai_api_key.get_secret_value(),
-                                      timeout=self.settings.openai_timeout_seconds, max_retries=0)
+                                      timeout=self.settings.openai_timeout_seconds,
+                                      max_retries=self.settings.openai_max_retries)
         return self._client
 
     @staticmethod
