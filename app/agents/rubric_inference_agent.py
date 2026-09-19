@@ -91,10 +91,18 @@ def normalize_category_weights(drafts: list[RubricFactorDraft], taxonomy: Factor
     normalized: list[RubricFactorDraft] = []
     for category, rows in by_category.items():
         stated = [row for row in rows if row.weight_source == "stated" and row.weight is not None]
-        inferred = [row for row in rows if row.weight_source != "stated" and row.weight_source != "manual_override"
-                    and row.weight is not None]
+        inferred = [row for row in rows if row.weight_source in {
+            "cross_school_inferred", "qualitative_inferred",
+        } and row.weight is not None]
         manual = [row for row in rows if row.weight_source == "manual_override"]
-        others = [row for row in rows if row.weight is None]
+        pending = [row for row in rows if row.weight_source == "pending_evidence"]
+        others = [
+            row for row in rows
+            if row.weight is None and row.weight_source not in {
+                "stated", "cross_school_inferred", "qualitative_inferred",
+                "manual_override", "pending_evidence",
+            }
+        ]
 
         stated_sum = sum((row.weight for row in stated), Decimal("0"))
         if stated_sum > 1:
@@ -118,7 +126,13 @@ def normalize_category_weights(drafts: list[RubricFactorDraft], taxonomy: Factor
         elif inferred and remaining == 0:
             inferred = [row.model_copy(update={"weight": Decimal("0")}) for row in inferred]
 
-        normalized.extend(stated + inferred + manual + others)
+        # Pending slots stay at weight 0 until evidence arrives — do not absorb category mass.
+        pending = [
+            row.model_copy(update={"weight": Decimal("0"), "confidence": Decimal("0")})
+            for row in pending
+        ]
+
+        normalized.extend(stated + inferred + manual + pending + others)
     return normalized
 
 
@@ -291,8 +305,30 @@ class RubricInferenceAgent:
         normalized = normalize_category_weights(automated, self.taxonomy)
         merged = {d.factor_key: d for d in normalized}
         merged.update(preserve_manual)
+
+        # Always materialize the full client taxonomy (minus meta *_stated_weights slots)
+        # so every category/sub-factor appears in the rubric UI. Missing evidence → weight 0.
+        for factor in self.taxonomy.factors:
+            if factor.key.endswith("_stated_weights"):
+                continue
+            if factor.key in merged:
+                continue
+            merged[factor.key] = RubricFactorDraft(
+                factor_key=factor.key,
+                value=None,
+                weight=Decimal("0"),
+                weight_source="pending_evidence",
+                confidence=Decimal("0"),
+                reasoning=(
+                    f"No school-specific evidence for {factor.key} yet "
+                    f"({factor.category}). Slot reserved from the approved taxonomy; "
+                    "weight 0 until documents/web research fill it."
+                ),
+                source_urls=[],
+            )
+
         # Final validation gate.
         for draft in merged.values():
-            if draft.weight_source != "manual_override" and not draft.source_urls:
+            if draft.weight_source not in {"manual_override", "pending_evidence"} and not draft.source_urls:
                 raise RubricWriteRejected(f"Ungrounded draft for {draft.factor_key}")
         return list(merged.values())

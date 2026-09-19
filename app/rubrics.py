@@ -131,11 +131,19 @@ class RubricService:
             facts=facts, stats_by_key=stats, preserve_manual=manuals,
         )
         saved = await self.persist(school_id, drafts)
+        # Enrich for API/UI consumers.
+        for item in saved:
+            definition = self.taxonomy.by_key.get(item["factor_key"])
+            item["category"] = definition.category if definition else None
+            item["description"] = definition.description if definition else None
+            item["scoring_eligible"] = definition.scoring_eligible if definition else True
         return {
             "school_id": school_id,
             "factor_count": len(saved),
             "rubric_status": "draft",
             "factors": saved,
+            "category_count": len({f.get("category") for f in saved if f.get("category")}),
+            "taxonomy_version": self.taxonomy.version,
         }
 
     async def list_factors(self, school_id: UUID) -> dict:
@@ -144,7 +152,18 @@ class RubricService:
         async def read(connection):
             rows = (await connection.execute(select(RUBRIC).where(RUBRIC.c.school_id == school_id)
                                              .order_by(RUBRIC.c.factor_key))).mappings().all()
-            return [dict(row) for row in rows]
+            enriched = []
+            for row in rows:
+                item = dict(row)
+                definition = self.taxonomy.by_key.get(item["factor_key"])
+                item["category"] = definition.category if definition else None
+                item["description"] = definition.description if definition else None
+                item["scoring_eligible"] = definition.scoring_eligible if definition else True
+                enriched.append(item)
+            # Stable category order matching the client taxonomy.
+            order = {name: index for index, name in enumerate(self.taxonomy.categories)}
+            enriched.sort(key=lambda row: (order.get(row.get("category") or "", 999), row["factor_key"]))
+            return enriched
         factors = await self.database.transaction("list_rubric_factors", read)
         return {
             "school_id": school_id,
@@ -152,6 +171,8 @@ class RubricService:
             "rubric_approved_at": school.get("rubric_approved_at"),
             "rubric_approved_by": school.get("rubric_approved_by"),
             "factors": factors,
+            "category_count": len({f.get("category") for f in factors if f.get("category")}),
+            "taxonomy_version": self.taxonomy.version,
         }
 
     async def override_factor(

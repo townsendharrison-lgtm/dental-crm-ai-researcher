@@ -119,12 +119,12 @@ class RubricFactor(Identity, Created, Updated, Base):
         CheckConstraint("btrim(factor_key) <> ''", name="rubric_factor_nonempty"),
         CheckConstraint("weight IS NULL OR (weight >= 0 AND weight < 'Infinity'::numeric)", name="rubric_weight_nonnegative"),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="rubric_confidence"),
-        CheckConstraint("weight_source IN ('stated','cross_school_inferred','qualitative_inferred','manual_override')", name="rubric_weight_source"),
+        CheckConstraint("weight_source IN ('stated','cross_school_inferred','qualitative_inferred','manual_override','pending_evidence')", name="rubric_weight_source"),
         CheckConstraint("btrim(reasoning) <> ''", name="rubric_reasoning_required"),
         CheckConstraint("value IS DISTINCT FROM 'null'::jsonb", name="rubric_no_json_null"),
         CheckConstraint("(value IS NOT NULL OR weight IS NOT NULL) OR confidence = 0", name="rubric_unknown_confidence"),
         CheckConstraint("array_position(source_urls, NULL) IS NULL AND array_position(source_urls, '') IS NULL AND array_to_string(source_urls, '') !~ '[[:space:]]'", name="rubric_sources_valid"),
-        CheckConstraint("weight_source = 'manual_override' OR cardinality(source_urls) > 0", name="rubric_grounding_required"),
+        CheckConstraint("weight_source IN ('manual_override','pending_evidence') OR cardinality(source_urls) > 0", name="rubric_grounding_required"),
     )
     school_id: Mapped[UUID] = mapped_column(ForeignKey(f"{SCHEMA}.schools.id", ondelete="RESTRICT"))
     factor_key: Mapped[str] = mapped_column(Text)

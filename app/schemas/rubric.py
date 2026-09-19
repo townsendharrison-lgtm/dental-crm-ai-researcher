@@ -38,7 +38,10 @@ class RubricFactorDraft(BaseModel):
     factor_key: str = Field(min_length=1)
     value: Any | None = None
     weight: Decimal | None = None
-    weight_source: Literal["stated", "cross_school_inferred", "qualitative_inferred", "manual_override"]
+    weight_source: Literal[
+        "stated", "cross_school_inferred", "qualitative_inferred",
+        "manual_override", "pending_evidence",
+    ]
     confidence: Decimal = Field(ge=0, le=1)
     reasoning: str = Field(min_length=1)
     source_urls: list[str] = Field(default_factory=list)
@@ -53,7 +56,7 @@ class RubricFactorDraft(BaseModel):
 
     @model_validator(mode="after")
     def enforce_grounding(self):
-        if self.weight_source != "manual_override" and not self.source_urls:
+        if self.weight_source not in {"manual_override", "pending_evidence"} and not self.source_urls:
             raise RubricWriteRejected("Automated rubric rows require at least one source_url")
         if self.value is None and self.weight is None and self.confidence != 0:
             raise RubricWriteRejected("Unknown value/weight requires confidence 0")

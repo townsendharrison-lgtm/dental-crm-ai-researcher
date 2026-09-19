@@ -136,6 +136,34 @@ async def test_cross_school_weights_differ_by_percentile(taxonomy):
     assert low.weight == school_specific_provisional_weight("avg_gpa", percentile_rank=10.0)
 
 
+async def test_infer_materializes_full_taxonomy_with_pending_slots():
+    """Rubric must cover every client category/sub-factor, not only extracted facts."""
+    from app.factor_taxonomy import get_taxonomy
+
+    taxonomy = get_taxonomy()
+    school_id = uuid4()
+    agent = RubricInferenceAgent(taxonomy, llm=None)
+    drafts = await agent.infer(
+        school_id=school_id,
+        official_url="https://school.edu",
+        facts=[fact(value=3.7)],
+        stats_by_key={},
+    )
+    by_key = {d.factor_key: d for d in drafts}
+    expected = [f.key for f in taxonomy.factors if not f.key.endswith("_stated_weights")]
+    assert len(by_key) == len(expected)
+    assert set(by_key) == set(expected)
+    categories = {taxonomy.by_key[k].category for k in by_key}
+    assert categories == set(taxonomy.categories)
+    assert by_key["avg_gpa"].weight_source == "cross_school_inferred"
+    assert by_key["avg_gpa"].weight and by_key["avg_gpa"].weight > 0
+    pending = [d for d in drafts if d.weight_source == "pending_evidence"]
+    assert pending
+    assert all(d.weight == Decimal("0") for d in pending)
+    assert "mission_alignment" in by_key
+    assert by_key["mission_alignment"].weight_source == "pending_evidence"
+
+
 async def test_cross_school_provisional_matches_phase4_before_norm(taxonomy):
     school_id = uuid4()
     agent = RubricInferenceAgent(taxonomy, llm=None)

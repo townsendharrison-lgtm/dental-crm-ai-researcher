@@ -19,6 +19,8 @@ class RubricGenerateResponse(BaseModel):
     factor_count: int
     rubric_status: str = "draft"
     factors: list[dict]
+    category_count: int | None = None
+    taxonomy_version: str | None = None
 
 
 class RubricListResponse(BaseModel):
@@ -27,6 +29,8 @@ class RubricListResponse(BaseModel):
     rubric_approved_at: datetime | None = None
     rubric_approved_by: str | None = None
     factors: list[dict]
+    category_count: int | None = None
+    taxonomy_version: str | None = None
 
 
 class RubricOverrideRequest(BaseModel):
