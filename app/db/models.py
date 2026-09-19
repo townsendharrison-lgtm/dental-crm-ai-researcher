@@ -92,9 +92,17 @@ class SchoolRawFact(Identity, Created, Base):
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="facts_confidence"),
         CheckConstraint("value IS DISTINCT FROM 'null'::jsonb", name="facts_no_json_null"),
         CheckConstraint("value IS NOT NULL OR confidence = 0", name="facts_unknown_confidence"),
-        CheckConstraint("source_type IN ('document','web')", name="facts_source_type"),
-        CheckConstraint("(source_type = 'document' AND document_id IS NOT NULL) OR (source_type = 'web' AND source_url IS NOT NULL)", name="facts_source_required"),
-        CheckConstraint("source_url IS NULL OR source_url ~ '^https?://[^[:space:]]+$'", name="facts_url"),
+        CheckConstraint("source_type IN ('document','web','manual')", name="facts_source_type"),
+        CheckConstraint(
+            "(source_type = 'document' AND document_id IS NOT NULL) OR "
+            "(source_type = 'web' AND source_url IS NOT NULL) OR "
+            "(source_type = 'manual')",
+            name="facts_source_required",
+        ),
+        CheckConstraint(
+            "source_url IS NULL OR source_url ~ '^(https?://[^[:space:]]+|manual:[^[:space:]]+)$'",
+            name="facts_url",
+        ),
         CheckConstraint("page_number IS NULL OR page_number > 0", name="facts_page"),
         Index("ix_facts_school_factor", "school_id", "factor_key"),
     )

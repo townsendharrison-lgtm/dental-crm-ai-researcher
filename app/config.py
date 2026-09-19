@@ -42,8 +42,15 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=5, ge=0, le=20)
     page_cache_ttl_days: int = Field(default=30, ge=1, le=365)
     research_confidence_floor: float = Field(default=0.5, ge=0, le=1)
-    research_max_gaps: int = Field(default=20, ge=1, le=200)
-    research_max_urls_per_gap: int = Field(default=3, ge=1, le=10)
+    # Admin crawl (docs + explicit URL only — no multi-site search).
+    research_max_gaps: int = Field(default=80, ge=1, le=200)
+    research_max_urls_per_gap: int = Field(default=1, ge=1, le=10)
+    # Deprecated: Tavily multi-site search removed; kept for env compat (unused).
+    research_max_searches: int = Field(default=0, ge=0, le=30)
+    research_max_extract_calls: int = Field(default=40, ge=1, le=200)
+    research_max_chunks_per_page: int = Field(default=3, ge=1, le=20)
+    research_max_pages: int = Field(default=30, ge=1, le=100)
+    research_job_timeout_seconds: float = Field(default=600, gt=30, le=1800)
     research_min_page_chars: int = Field(default=400, ge=50, le=5000)
     research_chunk_chars: int = Field(default=16000, ge=500, le=20000)
     openai_api_key: SecretStr = SecretStr("")

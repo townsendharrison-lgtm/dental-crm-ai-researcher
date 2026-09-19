@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import json
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agents.web_research_agent import WebResearchAgent, compute_gaps
@@ -112,6 +112,120 @@ class ResearchService:
             return [dict(row) for row in rows]
         return await self.database.transaction("read_school_facts", read)
 
+    async def load_facts_for_ui(self, school_id: UUID) -> list[dict]:
+        """Best fact per taxonomy key, enriched with hoped-to-extract description.
+
+        Includes empty slots for factors with no evidence yet so admins can edit manually.
+        """
+        async def read(connection):
+            if not await connection.scalar(select(SCHOOLS.c.id).where(SCHOOLS.c.id == school_id)):
+                raise ResearchNotFound("School does not exist")
+            rows = (await connection.execute(select(FACTS).where(FACTS.c.school_id == school_id))).mappings().all()
+            return [dict(row) for row in rows]
+
+        rows = await self.database.transaction("read_school_facts_ui", read)
+        best: dict[str, dict] = {}
+        for row in rows:
+            key = row["factor_key"]
+            current = best.get(key)
+            if current is None:
+                best[key] = row
+                continue
+            if row.get("source_type") == "manual" and current.get("source_type") != "manual":
+                best[key] = row
+                continue
+            if current.get("source_type") == "manual" and row.get("source_type") != "manual":
+                continue
+            if float(row["confidence"]) > float(current["confidence"]):
+                best[key] = row
+
+        enriched = []
+        for factor in self.taxonomy.factors:
+            if factor.key.endswith("_stated_weights"):
+                continue
+            row = best.get(factor.key)
+            if row:
+                item = dict(row)
+            else:
+                item = {
+                    "id": None,
+                    "school_id": school_id,
+                    "factor_key": factor.key,
+                    "value": None,
+                    "unit": factor.unit,
+                    "source_type": None,
+                    "source_url": None,
+                    "document_id": None,
+                    "confidence": None,
+                    "raw_text_snippet": None,
+                    "section": None,
+                }
+            item["description"] = factor.description
+            item["category"] = factor.category
+            item["hoped_to_extract"] = factor.description
+            item["scoring_eligible"] = factor.scoring_eligible
+            enriched.append(item)
+        return enriched
+
+    async def upsert_manual_fact(
+        self,
+        school_id: UUID,
+        factor_key: str,
+        *,
+        value,
+        unit: str | None,
+        editor: str,
+        reason: str,
+        confidence: float = 1.0,
+    ) -> dict:
+        if factor_key not in self.taxonomy.by_key:
+            raise ResearchNotFound("Unknown taxonomy factor")
+        if not editor.strip() or not reason.strip():
+            raise ValueError("editor and reason are required")
+        definition = self.taxonomy.by_key[factor_key]
+        source_url = f"manual:{editor.strip()}"
+
+        async def write(connection):
+            if not await connection.scalar(select(SCHOOLS.c.id).where(SCHOOLS.c.id == school_id)):
+                raise ResearchNotFound("School does not exist")
+            # Replace prior manual row for this factor so the latest admin edit wins.
+            await connection.execute(
+                delete(FACTS).where(
+                    FACTS.c.school_id == school_id,
+                    FACTS.c.factor_key == factor_key,
+                    FACTS.c.source_type == "manual",
+                )
+            )
+            fact_id = uuid4()
+            await connection.execute(insert(FACTS).values(
+                id=fact_id,
+                school_id=school_id,
+                factor_key=factor_key,
+                value=value,
+                unit=unit if unit is not None else definition.unit,
+                source_type="manual",
+                source_url=source_url,
+                document_id=None,
+                confidence=confidence,
+                raw_text_snippet=reason.strip(),
+                section="manual_override",
+            ))
+            return {
+                "id": str(fact_id),
+                "school_id": str(school_id),
+                "factor_key": factor_key,
+                "value": value,
+                "unit": unit if unit is not None else definition.unit,
+                "source_type": "manual",
+                "source_url": source_url,
+                "confidence": confidence,
+                "description": definition.description,
+                "category": definition.category,
+                "hoped_to_extract": definition.description,
+            }
+
+        return await self.database.transaction("upsert_manual_fact", write)
+
     async def list_web_sources(self, school_id: UUID) -> list[dict]:
         """Distinct web source URLs that produced facts for this school."""
         async def read(connection):
@@ -178,15 +292,18 @@ class ResearchService:
         facts = await self.load_facts(school["id"])
         gaps = compute_gaps(self.taxonomy, facts, confidence_floor=self.settings.research_confidence_floor)
         # Keys already covered at/above the confidence floor must not be re-written.
-        covered = set()
+        # Manual admin values are always treated as covered.
         best: dict[str, float] = {}
+        covered: set[str] = set()
         for row in facts:
             key = row["factor_key"]
+            if row.get("source_type") == "manual":
+                covered.add(key)
             conf = float(row["confidence"])
             if key not in best or conf > best[key]:
                 best[key] = conf
         floor = self.settings.research_confidence_floor
-        covered = {key for key, conf in best.items() if conf >= floor}
+        covered |= {key for key, conf in best.items() if conf >= floor}
 
         agent = WebResearchAgent(self.settings, self.search, self.fetch, self.llm, self.taxonomy)
         if target_url:
@@ -195,6 +312,7 @@ class ResearchService:
                 url=target_url, gaps=gaps, force_refresh=force_refresh,
             )
         else:
+            # Crawl the school's official URL deeply (no multi-site search).
             outcome = await agent.research_gaps(
                 school_name=school["name"], official_url=school["official_url"],
                 gaps=gaps, force_refresh=force_refresh,
@@ -208,6 +326,7 @@ class ResearchService:
             "outcomes": outcome["outcomes"],
             "write_count": len(writes),
             "skipped_covered_keys": sorted({w.factor_key for w in outcome["writes"] if w.factor_key in covered}),
+            "budget": outcome.get("budget"),
         }
         return serializable, writes
 

@@ -62,6 +62,15 @@ class SchoolFactsResponse(BaseModel):
     facts: list[dict]
 
 
+class ManualFactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: object | None = None
+    unit: str | None = None
+    editor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
 class SchoolDocumentItem(BaseModel):
     document_id: UUID
     filename: str
@@ -165,8 +174,12 @@ def build_school_router() -> APIRouter:
     @router.post(
         "/schools/{school_id}/research",
         response_model=ResearchEnqueueResponse,
-        summary="Enqueue allow-listed web research for factor gaps",
-        description="Computes missing/low-confidence taxonomy gaps after document extraction, then enqueues a research_school job that searches only allow-listed domains, fetches pages with TTL caching, and writes grounded school_raw_facts with source_url.",
+        summary="Deep-crawl the school's official URL for factor gaps",
+        description=(
+            "Enqueues a research_school job that BFS-crawls the school's official_url "
+            "(same-host subpages) and extracts missing taxonomy facts. Does not search "
+            "third-party sites. Prefer POST /crawl-url for an explicit admin-chosen URL."
+        ),
     )
     async def enqueue_research(
         school_id: UUID,
@@ -217,8 +230,12 @@ def build_school_router() -> APIRouter:
     @router.post(
         "/schools/{school_id}/crawl-url",
         response_model=ResearchEnqueueResponse,
-        summary="Fetch and extract facts from one admin-provided URL",
-        description="Enqueues a research job that fetches a specific URL (its host is trusted) and extracts taxonomy facts from it, writing grounded school_raw_facts with source_url. Use for a school's official page or another admin-chosen source.",
+        summary="Deep-crawl an admin-provided URL and its subpages",
+        description=(
+            "Enqueues a research job that fetches the given URL, follows same-host links "
+            "(admissions-related paths preferred), and extracts taxonomy facts into "
+            "school_raw_facts. Use for the school's official site or another admin-chosen page."
+        ),
     )
     async def crawl_url(
         school_id: UUID,
@@ -237,12 +254,42 @@ def build_school_router() -> APIRouter:
     @router.get(
         "/schools/{school_id}/facts",
         response_model=SchoolFactsResponse,
-        summary="Read all extracted raw facts for a school",
-        description="Returns every school_raw_facts row for the school (from document ingest, targeted URL crawl and web research), including source_type and source_url provenance.",
+        summary="Read extracted raw facts for a school (taxonomy-complete)",
+        description=(
+            "Returns one row per taxonomy factor with hoped_to_extract description. "
+            "Filled from the best document/web/manual fact when present; empty slots "
+            "are included so admins can edit missing values."
+        ),
     )
     async def get_school_facts(school_id: UUID, request: Request):
-        facts = await _research(request).load_facts(school_id)
+        try:
+            facts = await _research(request).load_facts_for_ui(school_id)
+        except ResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
         return SchoolFactsResponse(school_id=school_id, fact_count=len(facts), facts=facts)
+
+    @router.patch(
+        "/schools/{school_id}/facts/{factor_key}",
+        summary="Manually set or correct a raw fact value",
+        description=(
+            "Upserts a source_type=manual school_raw_facts row for the factor. "
+            "Manual values take precedence over document/web extractions."
+        ),
+    )
+    async def patch_manual_fact(
+        school_id: UUID, factor_key: str, payload: ManualFactRequest, request: Request,
+    ):
+        try:
+            return await _research(request).upsert_manual_fact(
+                school_id, factor_key,
+                value=payload.value, unit=payload.unit,
+                editor=payload.editor, reason=payload.reason,
+                confidence=payload.confidence,
+            )
+        except ResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     @router.get(
         "/schools/{school_id}/documents",

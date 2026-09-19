@@ -73,7 +73,16 @@ def best_facts_by_key(facts: Sequence[FactView]) -> dict[str, FactView]:
     best: dict[str, FactView] = {}
     for fact in facts:
         current = best.get(fact.factor_key)
-        if current is None or fact.confidence > current.confidence:
+        if current is None:
+            best[fact.factor_key] = fact
+            continue
+        # Manual admin values always win over extracted evidence.
+        if fact.source_type == "manual" and current.source_type != "manual":
+            best[fact.factor_key] = fact
+            continue
+        if current.source_type == "manual" and fact.source_type != "manual":
+            continue
+        if fact.confidence > current.confidence:
             best[fact.factor_key] = fact
     return best
 

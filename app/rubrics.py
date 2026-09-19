@@ -92,8 +92,9 @@ class RubricService:
         return await self.database.transaction("read_manual_rubric", read)
 
     async def persist(self, school_id: UUID, drafts: list[RubricFactorDraft]) -> list[dict]:
+        # pending_evidence slots intentionally have no citations (weight 0 placeholders).
         for draft in drafts:
-            if draft.weight_source != "manual_override" and not draft.source_urls:
+            if draft.weight_source not in {"manual_override", "pending_evidence"} and not draft.source_urls:
                 raise RubricWriteRejected(f"Refusing ungrounded write for {draft.factor_key}")
 
         async def write(connection):
@@ -183,16 +184,49 @@ class RubricService:
             raise RubricNotFound("Unknown taxonomy factor")
         if not editor.strip() or not reason.strip() or not reasoning.strip():
             raise RubricWriteRejected("editor, reason and reasoning are required")
+        definition = self.taxonomy.by_key[factor_key]
 
         async def write(connection):
             current = (await connection.execute(select(RUBRIC).where(
                 RUBRIC.c.school_id == school_id, RUBRIC.c.factor_key == factor_key,
             ).with_for_update())).mappings().first()
-            if current is None:
-                raise RubricNotFound("Rubric factor does not exist; generate the rubric first")
-            urls = list(source_urls) if source_urls is not None else list(current["source_urls"] or [])
+            urls = list(source_urls) if source_urls is not None else list((current or {}).get("source_urls") or [])
             if not urls:
                 urls = [f"manual:{editor.strip()}"]
+            if current is None:
+                old_value = {
+                    "value": None, "weight": None, "confidence": 0,
+                    "weight_source": "pending_evidence", "reasoning": "", "source_urls": [],
+                }
+                new_weight = Decimal(str(weight)) if weight is not None else Decimal("0")
+                new_confidence = Decimal(str(confidence)) if confidence is not None else Decimal("1")
+                new_value_payload = {
+                    "value": value,
+                    "weight": float(new_weight),
+                    "confidence": float(new_confidence), "weight_source": "manual_override",
+                    "reasoning": reasoning.strip(), "source_urls": urls,
+                }
+                await connection.execute(pg_insert(RUBRIC).values(
+                    id=uuid4(), school_id=school_id, factor_key=factor_key,
+                    value=value, weight=new_weight, weight_source="manual_override",
+                    confidence=new_confidence, reasoning=reasoning.strip(), source_urls=urls,
+                ).on_conflict_do_update(
+                    index_elements=[RUBRIC.c.school_id, RUBRIC.c.factor_key],
+                    set_={
+                        "value": value, "weight": new_weight, "weight_source": "manual_override",
+                        "confidence": new_confidence, "reasoning": reasoning.strip(),
+                        "source_urls": urls,
+                    },
+                ))
+                await connection.execute(pg_insert(OVERRIDES).values(
+                    id=uuid4(), school_id=school_id, factor_key=factor_key,
+                    old_value=old_value, new_value=new_value_payload,
+                    editor=editor.strip(), reason=reason.strip(),
+                ))
+                await self._mark_draft(connection, school_id)
+                return {"factor_key": factor_key, "old_value": old_value, "new_value": new_value_payload,
+                        "rubric_status": "draft", "category": definition.category,
+                        "description": definition.description}
             old_value = {
                 "value": current["value"], "weight": float(current["weight"]) if current["weight"] is not None else None,
                 "confidence": float(current["confidence"]), "weight_source": current["weight_source"],
@@ -220,7 +254,8 @@ class RubricService:
             ))
             await self._mark_draft(connection, school_id)
             return {"factor_key": factor_key, "old_value": old_value, "new_value": new_value_payload,
-                    "rubric_status": "draft"}
+                    "rubric_status": "draft", "category": definition.category,
+                    "description": definition.description}
         return await self.database.transaction("override_rubric_factor", write)
 
     async def approve(self, school_id: UUID, *, editor: str) -> dict:

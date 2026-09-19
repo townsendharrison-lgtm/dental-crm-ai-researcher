@@ -151,7 +151,6 @@ async def test_agent_writes_facts_with_real_source_urls(settings, taxonomy):
         fact(raw_text_snippet="Average overall GPA 3.7", page_number=None),
     ])])
     gaps = compute_gaps(taxonomy, [], confidence_floor=0.5)
-    # Only research avg_gpa gap first by limiting taxonomy subset via max_gaps order.
     agent = WebResearchAgent(settings, FakeSearch(), FakeFetch(), llm, taxonomy)
     try:
         outcome = await agent.research_gaps(
@@ -161,12 +160,12 @@ async def test_agent_writes_facts_with_real_source_urls(settings, taxonomy):
     finally:
         await llm.close()
 
-    assert outcome["rejected_urls"]
-    assert all(item["reason"] == "off_allow_list" for item in outcome["rejected_urls"])
+    # Official URL is fetched first and fills the gap — search may not run.
     assert len(outcome["writes"]) == 1
     write = outcome["writes"][0]
     assert write.factor_key == "avg_gpa" and write.value == 3.7
     assert write.source_url == school_url
+    assert outcome.get("budget", {}).get("extract_calls", 0) >= 1
 
 
 def test_research_endpoint_enqueues_job(settings):
