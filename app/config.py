@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     research_max_gaps: int = Field(default=20, ge=1, le=131)
     research_max_urls_per_gap: int = Field(default=3, ge=1, le=10)
     research_min_page_chars: int = Field(default=400, ge=50, le=5000)
-    research_chunk_chars: int = Field(default=8000, ge=500, le=20000)
+    research_chunk_chars: int = Field(default=16000, ge=500, le=20000)
     openai_api_key: SecretStr = SecretStr("")
     openai_model: Literal["gpt-4o"] = "gpt-4o"
     openai_timeout_seconds: float = Field(default=60, gt=0, le=180)
@@ -56,7 +56,12 @@ class Settings(BaseSettings):
     document_max_bytes: int = Field(default=25_000_000, ge=1024, le=100_000_000)
     document_max_pages: int = Field(default=300, ge=1, le=1000)
     document_max_chars: int = Field(default=2_000_000, ge=1000, le=10_000_000)
-    document_chunk_chars: int = Field(default=8000, ge=500, le=20000)
+    # Larger chunks => fewer OpenAI calls (each call also carries the full taxonomy,
+    # so fewer chunks cuts repeated overhead and rate-limit pressure significantly).
+    document_chunk_chars: int = Field(default=16000, ge=500, le=20000)
+    # Skip chunks with less than this many non-whitespace chars (boilerplate,
+    # page numbers, headers) — they rarely contain facts and waste an LLM call.
+    document_min_chunk_chars: int = Field(default=180, ge=0, le=2000)
     document_max_chunks: int = Field(default=1000, ge=1, le=5000)
     ocr_timeout_seconds: float = Field(default=45, gt=0, le=120)
     tesseract_cmd: str = "tesseract"

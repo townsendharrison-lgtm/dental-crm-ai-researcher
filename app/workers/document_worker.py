@@ -84,10 +84,16 @@ class DocumentWorker:
                 ]}
                 # Save parsed text before any model request. Restart uses this checkpoint.
                 await self.service.checkpoint(task, token, result)
+            min_chars = self.service.settings.document_min_chunk_chars
             for index, saved in enumerate(result["chunks"]):
                 if saved["status"] in {"succeeded", "failed"}:
                     continue
                 chunk = DocumentChunk(**{key: saved[key] for key in ("index", "text", "page_number", "section", "used_ocr")})
+                # Skip near-empty chunks (boilerplate/page numbers) without an LLM call.
+                if len("".join(chunk.text.split())) < min_chars:
+                    saved.update(status="succeeded", skipped="low_content")
+                    await self.service.checkpoint(task, token, result, chunk_index=index, facts=[])
+                    continue
                 try:
                     extraction = await self.llm.extract(chunk, taxonomy)
                     saved.update(status="succeeded", usage=extraction.usage)
