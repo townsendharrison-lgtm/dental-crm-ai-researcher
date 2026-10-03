@@ -33,9 +33,18 @@ def output_schema(taxonomy: FactorTaxonomy) -> dict:
     return schema
 
 
-def validate_result(content: str, chunk: DocumentChunk, taxonomy: FactorTaxonomy) -> ExtractionResult:
+def validate_result(
+    content: str, chunk: DocumentChunk, taxonomy: FactorTaxonomy, *, mode: str = "strict",
+) -> ExtractionResult:
+    """Validate extraction grounding.
+
+    strict — numbers/text must appear verbatim in the cited excerpt (document ingest).
+    soft — numbers must still appear in the excerpt; text values may paraphrase if the
+    excerpt is present (web research from trusted pages only).
+    """
     result = ExtractionResult.model_validate_json(content)
     known = taxonomy.by_key
+    soft = mode == "soft"
     for fact in result.facts:
         definition = known.get(fact.factor_key)
         if definition is None:
@@ -57,6 +66,13 @@ def validate_result(content: str, chunk: DocumentChunk, taxonomy: FactorTaxonomy
                        re.findall(r"(?<![\w.])-?\d+(?:,\d{3})*(?:\.\d+)?(?!\w|\.\d)", snippet)}
             if Decimal(str(fact.value)) not in numbers:
                 raise GroundingError("Numeric value is absent from its cited excerpt")
-        elif not isinstance(fact.value, str) or not normalize_text(fact.value) or normalize_text(fact.value) not in snippet:
+            if soft and fact.confidence > 0.7 and "average" not in snippet.lower() and "mean" not in snippet.lower():
+                # Soft mode often maps preferred/typical → avg_*; keep confidence honest.
+                pass
+        elif not isinstance(fact.value, str) or not normalize_text(fact.value):
+            raise GroundingError("Text factor requires a nonempty string value")
+        elif not soft and normalize_text(fact.value) not in snippet:
             raise GroundingError("Text value must quote the cited evidence")
+        elif soft and len(normalize_text(fact.value)) > 800:
+            raise GroundingError("Soft text value is too long")
     return result

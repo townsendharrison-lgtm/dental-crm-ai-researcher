@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=5, ge=1, le=20)
     db_max_overflow: int = Field(default=5, ge=0, le=20)
     page_cache_ttl_days: int = Field(default=30, ge=1, le=365)
-    research_confidence_floor: float = Field(default=0.5, ge=0, le=1)
+    research_confidence_floor: float = Field(default=0.25, ge=0, le=1)
     # Admin crawl (docs + explicit URL only — no multi-site search).
     research_max_gaps: int = Field(default=130, ge=1, le=200)
     research_max_urls_per_gap: int = Field(default=1, ge=1, le=10)

@@ -207,7 +207,7 @@ class WebResearchAgent:
                     break
                 try:
                     extract_calls[0] += 1
-                    extraction = await self.llm.extract(chunk, gap_taxonomy)
+                    extraction = await self.llm.extract(chunk, gap_taxonomy, mode="soft")
                 except ExtractionFailed as exc:
                     outcomes.append({
                         "factor_key": label, "url": page.url, "status": "extract_failed",
